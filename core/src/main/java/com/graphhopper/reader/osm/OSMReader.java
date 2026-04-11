@@ -207,7 +207,9 @@ public class OSMReader {
      * junction between different ways this will be ignored and no artificial edge will be created.
      */
     protected boolean isBarrierNode(ReaderNode node) {
-        return node.hasTag("barrier") || node.hasTag("ford");
+        return node.hasTag("barrier") || node.hasTag("ford")
+                || node.hasTag("whitewater")                  // dams, hazards, put-in/egress for kayak routing
+                || node.hasTag("waterway", "milestone");      // distance markers along waterways
     }
 
     /**
@@ -373,7 +375,7 @@ public class OSMReader {
         IntsRef relationFlags = getRelFlagsMap(way.getId());
         EdgeIteratorState edge = baseGraph.edge(fromIndex, toIndex).setDistance(distance);
         osmParsers.handleWayTags(edge.getEdge(), edgeIntAccess, way, relationFlags);
-        Map<String, KValue> map = way.getTag("key_values", Collections.emptyMap());
+        Map<String, KValue> map = lt.openmap.graphhopper.OpenmapOSMHelper.injectWaterwayMetadata(way, nodeTags, way.getTag("key_values", Collections.emptyMap()));
         if (!map.isEmpty())
             edge.setKeyValues(map);
 

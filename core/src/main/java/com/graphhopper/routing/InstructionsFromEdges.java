@@ -18,6 +18,7 @@
 package com.graphhopper.routing;
 
 import com.graphhopper.routing.ev.*;
+import lt.openmap.graphhopper.WaterwayObstacle;
 import com.graphhopper.routing.weighting.Weighting;
 import com.graphhopper.storage.Graph;
 import com.graphhopper.storage.NodeAccess;
@@ -47,6 +48,8 @@ public class InstructionsFromEdges implements Path.EdgeVisitor {
     private final EnumEncodedValue<RoadEnvironment> roadEnvEnc;
     private final IntEncodedValue lanesEnc;
     private final DecimalEncodedValue maxSpeedEnc;
+    // Optional: waterway obstacle encoder (null when kayak profile not loaded)
+    private final EnumEncodedValue<WaterwayObstacle> waterwayObstacleEnc;
 
     /**
      * True when the current instruction started on an unnamed link road and we want to
@@ -100,6 +103,8 @@ public class InstructionsFromEdges implements Path.EdgeVisitor {
         this.roadClassLinkEnc = evLookup.getBooleanEncodedValue(RoadClassLink.KEY);
         this.maxSpeedEnc = evLookup.getDecimalEncodedValue(MaxSpeed.KEY);
         this.lanesEnc = evLookup.hasEncodedValue(Lanes.KEY) ? evLookup.getIntEncodedValue(Lanes.KEY) : null;
+        this.waterwayObstacleEnc = evLookup.hasEncodedValue(WaterwayObstacle.KEY)
+                ? evLookup.getEnumEncodedValue(WaterwayObstacle.KEY, WaterwayObstacle.class) : null;
         this.nodeAccess = graph.getNodeAccess();
         this.ways = ways;
         prevNode = -1;
@@ -108,8 +113,12 @@ public class InstructionsFromEdges implements Path.EdgeVisitor {
         prevRoadEnv = null;
         prevInstructionNeedsNameFallback = false;
 
-        BooleanEncodedValue carAccessEnc = evLookup.getBooleanEncodedValue(VehicleAccess.key("car"));
-        outEdgeExplorer = graph.createEdgeExplorer(edge -> edge.get(carAccessEnc));
+        // For kayak routing we don't have car access, use all-edges explorer as fallback
+        BooleanEncodedValue carAccessEnc = evLookup.hasEncodedValue(VehicleAccess.key("car"))
+                ? evLookup.getBooleanEncodedValue(VehicleAccess.key("car")) : null;
+        outEdgeExplorer = carAccessEnc != null
+                ? graph.createEdgeExplorer(edge -> edge.get(carAccessEnc))
+                : graph.createEdgeExplorer();
         allExplorer = graph.createEdgeExplorer();
     }
 
@@ -162,6 +171,34 @@ public class InstructionsFromEdges implements Path.EdgeVisitor {
         final String destinationRef = (String) edge.getValue(STREET_DESTINATION_REF);
         final String motorwayJunction = (String) edge.getValue(MOTORWAY_JUNCTION);
         final RoadEnvironment roadEnv = edge.get(roadEnvEnc);
+
+        // Waterway obstacle detection (kayak routing)
+        final WaterwayObstacle waterwayObstacle = waterwayObstacleEnc != null
+                ? edge.get(waterwayObstacleEnc) : WaterwayObstacle.MISSING;
+        if (waterwayObstacle != WaterwayObstacle.MISSING) {
+            Instruction obstacleInstruction = lt.openmap.graphhopper.OpenmapInstructionHelper.createWaterwayObstacleInstruction(edge, waterwayObstacle, nodeAccess.is3D());
+            ways.add(obstacleInstruction);
+            // updatePointsAndInstruction uses prevInstruction - temporarily point it to obstacle
+            prevInstruction = obstacleInstruction;
+            updatePointsAndInstruction(edge, wayGeo);
+            prevNode = baseNode;
+            prevLat = adjLat;
+            prevLon = adjLon;
+            prevEdge = edge;
+            if (wayGeo.size() <= 2) {
+                doublePrevLat = prevLat;
+                doublePrevLon = prevLon;
+            } else {
+                int beforeLast = wayGeo.size() - 2;
+                doublePrevLat = wayGeo.getLat(beforeLast);
+                doublePrevLon = wayGeo.getLon(beforeLast);
+            }
+            prevInRoundabout = false;
+            // Reset so next segment creates a fresh "continue on river" instruction
+            prevInstruction = null;
+            prevName = null;
+            return;
+        }
 
         if ((prevInstruction == null) && (!isRoundabout)) // very first instruction (if not in Roundabout)
         {
@@ -501,6 +538,7 @@ public class InstructionsFromEdges implements Path.EdgeVisitor {
 
         return Instruction.IGNORE;
     }
+
 
     private void updatePointsAndInstruction(EdgeIteratorState edge, PointList pl) {
         // skip adjNode
