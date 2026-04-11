@@ -35,6 +35,7 @@ public class GraphHopperManaged implements Managed {
             graphHopper = new GraphHopperGtfs(configuration);
         } else {
             graphHopper = new GraphHopper();
+            graphHopper.setImportRegistry(new lt.openmap.graphhopper.OpenmapImportRegistry());
         }
         graphHopper.init(configuration);
     }

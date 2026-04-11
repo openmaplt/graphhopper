@@ -83,6 +83,9 @@ public class OSMParsers {
             return true;
         else if ("platform".equals(way.getTag("railway")))
             return true;
+        else if (way.getTag("waterway") != null)
+            // accept waterway=river|stream|canal|drain|... for kayak/canoe routing
+            return true;
         else
             return false;
     }

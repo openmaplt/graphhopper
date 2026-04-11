@@ -1,0 +1,20 @@
+// Custom model for kayak/canoe routing on OSM waterways.
+// Required encoded values in config.yml:
+//   graph.encoded_values: kayak_access, kayak_average_speed, waterway_obstacle, street_name
+// Profile:
+//   - name: kayak
+//     custom_model_files: [kayak.json]
+{
+  "distance_influence": 50,
+  "priority": [
+    { "if": "!kayak_access", "multiply_by": "0" },
+    // Prioritize direct water routes
+    { "if": "waterway_obstacle == DAM",      "multiply_by": "0.1" },
+    { "if": "waterway_obstacle == HAZARD",   "multiply_by": "0.3" },
+    { "if": "waterway_obstacle == PORTAGE",  "multiply_by": "0.5" }
+  ],
+  "speed": [
+    { "if": "!kayak_access", "limit_to": "0" },
+    { "else": "", "limit_to": "kayak_average_speed" }
+  ]
+}

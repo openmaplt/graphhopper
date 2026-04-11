@@ -60,7 +60,11 @@ import static com.graphhopper.util.Helper.nf;
  */
 public class WaySegmentParser {
     private static final Logger LOGGER = LoggerFactory.getLogger(WaySegmentParser.class);
-    private static final Set<String> INCLUDE_IF_NODE_TAGS = new HashSet<>(Arrays.asList("barrier", "highway", "railway", "crossing", "ford"));
+    private static final Set<String> INCLUDE_IF_NODE_TAGS = new HashSet<>(Arrays.asList(
+            "barrier", "highway", "railway", "crossing", "ford",
+            // Waterway obstacle tags for kayak/canoe routing
+            "whitewater", "waterway", "description", "name",
+            "distance", "waterway:milestone", "canoe", "boat", "kayak"));
 
     private Predicate<ReaderWay> wayFilter = way -> true;
     private Predicate<ReaderNode> splitNodeFilter = node -> false;

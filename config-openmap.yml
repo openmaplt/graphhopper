@@ -1,0 +1,93 @@
+graphhopper:
+
+  # OSM failas - pakeisk į savo failą
+  # Parsisiųsti galima: https://download.geofabrik.de/europe/lithuania-latest.osm.pbf
+  datareader.file: "data/lithuania-latest.osm.pbf"
+
+  # Grafo talpykla (bus sukurta importo metu)
+  graph.location: data/graph-cache
+
+  ##### Profiliai ####
+
+  profiles:
+    - name: car
+      custom_model_files: [car.json]
+    - name: bike
+      custom_model_files: [bike.json, bike_elevation.json]
+    - name: foot
+      custom_model_files: [foot.json, foot_elevation.json]
+    - name: kayak
+      custom_model_files: [kayak.json]
+
+  # Greičio režimas - kompromisas (kayak profiliui neaktualu, bet car ir bike pravers greitis)
+  profiles_ch:
+    - profile: car
+  profiles_lm: []
+
+  #### Koduotos reikšmės ####
+
+  graph.encoded_values: |
+    kayak_access, kayak_average_speed, waterway_obstacle,
+    car_access, car_average_speed, country, road_class, roundabout, max_speed, road_class_link, road_environment,
+    foot_access, foot_average_speed, foot_priority, foot_road_access, hike_rating, average_slope,
+    bike_access, bike_average_speed, bike_priority, bike_road_access, bike_network, mtb_rating, ferry_speed
+
+  #### Paukomiausias aukščio duomenys - galima išjungti ####
+  graph.elevation.provider: srtm
+
+  #### Potinkliai ####
+
+  # Upių tinklas yra labai pasklidęs - mažinkite jei reikia
+  prepare.min_network_size: 1
+  prepare.subnetworks.threads: 1
+
+  #### Maršrutizavimas ####
+
+  routing.snap_preventions_default: tunnel, bridge, ferry
+  routing.non_ch.max_waypoint_distance: 1000000
+
+  #### Saugykla ####
+  
+  # Išjungiame gatvių ignoravimą, kad automobilių ir dviračių profiliai rastų kelius.
+  import.osm.ignored_highways: ''
+
+  graph.dataaccess.default_type: RAM_STORE
+
+server:
+  application_connectors:
+  - type: http
+    port: 8989
+    # for security reasons bind to 0.0.0.0 for docker
+    bind_host: 0.0.0.0
+    # increase GET request limit - not necessary if /maps UI is not used or used without custom models
+    max_request_header_size: 50k
+  request_log:
+      appenders: []
+  admin_connectors:
+  - type: http
+    port: 8990
+    bind_host: 0.0.0.0
+
+# See https://www.dropwizard.io/en/latest/manual/core.html#logging
+logging:
+  appenders:
+    - type: file
+      time_zone: UTC
+      current_log_filename: logs/graphhopper.log
+      log_format: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+      archive: true
+      archived_log_filename_pattern: ./logs/graphhopper-%d.log.gz
+      archived_file_count: 30
+      never_block: true
+    - type: console
+      time_zone: UTC
+      log_format: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+  loggers:
+    "com.graphhopper.osm_warnings":
+      level: DEBUG
+      additive: false
+      appenders:
+        - type: file
+          currentLogFilename: logs/osm_warnings.log
+          archive: false
+          logFormat: '[%level] %msg%n'
