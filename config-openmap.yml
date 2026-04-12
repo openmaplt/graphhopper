@@ -1,13 +1,12 @@
 graphhopper:
 
-  # OSM failas - pakeisk į savo failą
-  # Parsisiųsti galima: https://download.geofabrik.de/europe/lithuania-latest.osm.pbf
+  # OSM file path
   datareader.file: "data/lithuania-latest.osm.pbf"
 
-  # Grafo talpykla (bus sukurta importo metu)
+  # Graph cache location
   graph.location: data/graph-cache
 
-  ##### Profiliai ####
+  ##### Profiles ####
 
   profiles:
     - name: car
@@ -19,12 +18,12 @@ graphhopper:
     - name: kayak
       custom_model_files: [kayak.json]
 
-  # Greičio režimas - kompromisas (kayak profiliui neaktualu, bet car ir bike pravers greitis)
+  # Acceleration modes
   profiles_ch:
     - profile: car
   profiles_lm: []
 
-  #### Koduotos reikšmės ####
+  #### Encoded Values ####
 
   graph.encoded_values: |
     kayak_access, kayak_average_speed, waterway_obstacle,
@@ -32,23 +31,23 @@ graphhopper:
     foot_access, foot_average_speed, foot_priority, foot_road_access, hike_rating, average_slope,
     bike_access, bike_average_speed, bike_priority, bike_road_access, bike_network, mtb_rating, ferry_speed
 
-  #### Paukomiausias aukščio duomenys - galima išjungti ####
+  #### Elevation provider ####
   graph.elevation.provider: srtm
 
-  #### Potinkliai ####
+  #### Subnetworks ####
 
-  # Upių tinklas yra labai pasklidęs - mažinkite jei reikia
-  prepare.min_network_size: 1
+  # min_network_size helps to remove small disconnected subgraphs.
+  # 200 is a safe value for car/bike/foot to avoid "island" issues.
+  prepare.min_network_size: 200
   prepare.subnetworks.threads: 1
 
-  #### Maršrutizavimas ####
+  #### Routing ####
 
   routing.snap_preventions_default: tunnel, bridge, ferry
   routing.non_ch.max_waypoint_distance: 1000000
 
-  #### Saugykla ####
+  #### Storage ####
   
-  # Išjungiame gatvių ignoravimą, kad automobilių ir dviračių profiliai rastų kelius.
   import.osm.ignored_highways: ''
 
   graph.dataaccess.default_type: RAM_STORE
@@ -57,9 +56,7 @@ server:
   application_connectors:
   - type: http
     port: 8989
-    # for security reasons bind to 0.0.0.0 for docker
     bind_host: 0.0.0.0
-    # increase GET request limit - not necessary if /maps UI is not used or used without custom models
     max_request_header_size: 50k
   request_log:
       appenders: []
@@ -68,7 +65,6 @@ server:
     port: 8990
     bind_host: 0.0.0.0
 
-# See https://www.dropwizard.io/en/latest/manual/core.html#logging
 logging:
   appenders:
     - type: file
