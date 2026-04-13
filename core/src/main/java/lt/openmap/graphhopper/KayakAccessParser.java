@@ -34,13 +34,13 @@ import java.util.Set;
 /**
  * Access parser for kayak/canoe routing on OSM waterways.
  * <p>
- * Allowed OSM way tags: waterway=river|stream|canal|drain|waterway
- * Blocked if: canoe=no, boat=no, kayak=no, or access=private/no
+ * Allowed OSM way tags: waterway=river|canal
+ * Blocked if: canoe=no, kayak=no, or access=private/no
  */
 public class KayakAccessParser extends AbstractAccessParser implements TagParser {
 
     private static final Set<String> ALLOWED_WATERWAYS = new HashSet<>(Arrays.asList(
-            "river", "stream", "canal", "drain", "waterway"
+            "river", "canal"
     ));
 
     public KayakAccessParser(EncodedValueLookup lookup, PMap properties) {
@@ -48,20 +48,22 @@ public class KayakAccessParser extends AbstractAccessParser implements TagParser
     }
 
     protected KayakAccessParser(BooleanEncodedValue accessEnc) {
-        super(accessEnc, Arrays.asList("canoe", "boat", "kayak", "access"));
-        // Remove 'service' from restricted since waterways don't use it
+        super(accessEnc, Arrays.asList("canoe", "kayak", "access"));
+        // Remove 'service' and 'boat' from restricted since they are handled explicitly or don't apply
         restrictedValues.remove("service");
     }
 
     public WayAccess getAccess(ReaderWay way) {
         String waterway = way.getTag("waterway");
 
-        // Waterway ways only - skip highways, paths, etc.
+        // Allowed waterway types only (river, canal).
+        // Skip streams, ditches, drains as they are often unnavigable by kayak.
         if (waterway == null || !ALLOWED_WATERWAYS.contains(waterway))
             return WayAccess.CAN_SKIP;
 
-        // Check explicit access restrictions for canoe/kayak/boat
-        if (way.hasTag("canoe", "no") || way.hasTag("kayak", "no") || way.hasTag("boat", "no"))
+        // Check explicit access restrictions for canoe/kayak
+        // NOTE: boat=no is intentionally ignored here to allow kayaks on small streams/rivers.
+        if (way.hasTag("canoe", "no") || way.hasTag("kayak", "no"))
             return WayAccess.CAN_SKIP;
 
         // Check generic access tag
@@ -78,8 +80,7 @@ public class KayakAccessParser extends AbstractAccessParser implements TagParser
         if (access.canSkip())
             return;
 
-        // Most waterways are bidirectional (can paddle upstream too, just slower)
-        // Oneway rivers (e.g. very fast current) could use oneway:canoe=yes but we allow both for now
+        // All navigationable waterways are treated as bidirectional.
         accessEnc.setBool(false, edgeId, edgeIntAccess, true);
         accessEnc.setBool(true, edgeId, edgeIntAccess, true);
     }
