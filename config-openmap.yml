@@ -53,6 +53,7 @@ graphhopper:
   graph.dataaccess.default_type: RAM_STORE
 
 server:
+  application_context_path: /route
   application_connectors:
   - type: http
     port: 8989

@@ -1,5 +1,5 @@
 const config = {
-    routingApi: location.origin + '/',
+    routingApi:  location.origin + location.pathname.split('/maps')[0] + '/',
     geocodingApi: '',
     defaultTiles: 'OpenStreetMap',
     keys: {
