@@ -16,6 +16,7 @@ import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
+import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.util.AffineTransformation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -77,6 +78,12 @@ public class MVTResource {
             throw new IllegalStateException("You need to configure GraphHopper to store road_class, e.g. graph.encoded_values: road_class,max_speed,... ");
 
         final EnumEncodedValue<RoadClass> roadClassEnc = encodingManager.getEnumEncodedValue(RoadClass.KEY, RoadClass.class);
+        final BooleanEncodedValue kayakAccessEnc = encodingManager.hasEncodedValue("kayak_access")
+                ? encodingManager.getBooleanEncodedValue("kayak_access") : null;
+        final EnumEncodedValue<lt.openmap.graphhopper.WaterwayObstacle> obstacleEnc =
+                encodingManager.hasEncodedValue(lt.openmap.graphhopper.WaterwayObstacle.KEY)
+                ? encodingManager.getEnumEncodedValue(lt.openmap.graphhopper.WaterwayObstacle.KEY, lt.openmap.graphhopper.WaterwayObstacle.class)
+                : null;
         final AtomicInteger edgeCounter = new AtomicInteger(0);
 
         // 256x256 pixels per MVT. here we transform from the global coordinate system to the local one of the tile.
@@ -94,7 +101,7 @@ public class MVTResource {
         locationIndex.query(bbox, edgeId -> {
             EdgeIteratorState edge = graphHopper.getBaseGraph().getEdgeIteratorStateForKey(edgeId * 2);
             LineString lineString;
-            if (renderAll) {
+            if (renderAll || (kayakAccessEnc != null && edge.get(kayakAccessEnc))) {
                 PointList pl = edge.fetchWayGeometry(FetchMode.ALL);
                 lineString = pl.toLineString(false);
             } else {
@@ -143,6 +150,19 @@ public class MVTResource {
 
             Geometry g = affineTransformation.transform(lineString);
             vectorTileEncoder.addFeature("roads", map, g, edge.getEdge());
+
+            if (obstacleEnc != null && zInfo >= 12) {
+                lt.openmap.graphhopper.WaterwayObstacle obstacle = edge.get(obstacleEnc);
+                if (obstacle != lt.openmap.graphhopper.WaterwayObstacle.MISSING) {
+                    PointList pl = edge.fetchWayGeometry(FetchMode.ALL);
+                    int mid = pl.size() / 2;
+                    Point point = geometryFactory.createPoint(new Coordinate(pl.getLon(mid), pl.getLat(mid)));
+                    Map<String, Object> obstacleMap = new LinkedHashMap<>(map);
+                    obstacleMap.put("obstacle_type", obstacle.name().toLowerCase());
+                    Geometry pg = affineTransformation.transform(point);
+                    vectorTileEncoder.addFeature("obstacles", obstacleMap, pg, edge.getEdge());
+                }
+            }
         });
 
 
