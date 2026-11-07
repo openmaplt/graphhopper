@@ -23,6 +23,7 @@ import com.graphhopper.routing.InstructionsFromEdges;
 import com.graphhopper.routing.Path;
 import com.graphhopper.routing.ev.*;
 import com.graphhopper.routing.util.EncodingManager;
+import com.graphhopper.routing.util.TransportationMode;
 import com.graphhopper.routing.util.TraversalMode;
 import com.graphhopper.routing.weighting.SpeedWeighting;
 import com.graphhopper.routing.weighting.Weighting;
@@ -90,7 +91,7 @@ public class GpxConversionsTest {
 
         Weighting weighting = new SpeedWeighting(speedEnc);
         Path p = new Dijkstra(g, weighting, TraversalMode.NODE_BASED).calcPath(1, 5);
-        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, g, weighting, carManager, trMap.getWithFallBack(Locale.US));
+        InstructionList wayList = InstructionsFromEdges.calcInstructions(List.of(p), g, weighting, TransportationMode.CAR, carManager, trMap.getWithFallBack(Locale.US), false);
         PointList points = p.calcPoints();
         assertEquals(4, wayList.size());
 
@@ -166,7 +167,7 @@ public class GpxConversionsTest {
         pl.add(52.555423473315, 13.43890086052345);
         pl.add(52.555550691982, 13.43946393816465);
         pl.add(52.555619423589, 13.43886994061328);
-        RoundaboutInstruction instr = new RoundaboutInstruction(Instruction.USE_ROUNDABOUT, "streetname", pl)
+        RoundaboutInstruction instr = new RoundaboutInstruction(Instruction.ROUNDABOUT_USE, "streetname", pl)
                 .setRadian(2.058006514284998d)
                 .setExitNumber(3)
                 .setExited();

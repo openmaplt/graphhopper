@@ -101,12 +101,14 @@ public class GraphHopper {
     private OSMParsers osmParsers;
     private int defaultSegmentSize = AbstractDataAccess.SEGMENT_SIZE_DEFAULT;
     private String ghLocation = "";
-    private DAType dataAccessDefaultType = DAType.RAM_STORE;
+    private DAType dataAccessDefaultType = DAType.RAM;
+    // false = purely in-memory graph: nothing is loaded from or flushed to disc
+    private boolean fileBacked = true;
     private final LinkedHashMap<String, String> dataAccessConfig = new LinkedHashMap<>();
     private boolean sortGraph = true;
     private boolean elevation = false;
     private LockFactory lockFactory = new NativeFSLockFactory();
-    private boolean allowWrites = true;
+    private boolean readOnly = false;
     private boolean fullyLoaded = false;
     private final OSMReaderConfig osmReaderConfig = new OSMReaderConfig();
     // for routing
@@ -227,18 +229,13 @@ public class GraphHopper {
     }
 
     /**
-     * Only valid option for in-memory graph and if you e.g. want to disable store on flush for unit
-     * tests. Specify storeOnFlush to true if you want that existing data will be loaded FROM disc
-     * and all in-memory data will be flushed TO disc after flush is called e.g. while OSM import.
-     *
-     * @param storeOnFlush true by default
+     * Only valid option for the in-memory graph: if true (default) existing data will be loaded
+     * FROM disc and all in-memory data will be flushed TO disc when flush is called, e.g. after
+     * the OSM import. Disable e.g. for unit tests.
      */
-    public GraphHopper setStoreOnFlush(boolean storeOnFlush) {
+    public GraphHopper setFileBacked(boolean fileBacked) {
         ensureNotLoaded();
-        if (storeOnFlush)
-            dataAccessDefaultType = DAType.RAM_STORE;
-        else
-            dataAccessDefaultType = DAType.RAM;
+        this.fileBacked = fileBacked;
         return this;
     }
 
@@ -297,14 +294,9 @@ public class GraphHopper {
         return profilesByName.get(profileName);
     }
 
-    public TransportationMode getNavigationMode(String profileName) {
+    public TransportationMode getInstructionsBaseMode(String profileName) {
         Profile profile = profilesByName.get(profileName);
-        if (profile == null) return TransportationMode.CAR;
-        try {
-            return TransportationMode.valueOf(profile.getHints().getString("navigation_mode", profileName).toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            return TransportationMode.CAR;
-        }
+        return profile == null ? TransportationMode.CAR : profile.getInstructionsBaseMode();
     }
 
     /**
@@ -418,16 +410,17 @@ public class GraphHopper {
         this.locationIndex = locationIndex;
     }
 
-    public boolean isAllowWrites() {
-        return allowWrites;
+    public boolean isReadOnly() {
+        return readOnly;
     }
 
     /**
-     * Specifies if it is allowed for GraphHopper to write. E.g. for read only filesystems it is not
-     * possible to create a lock file and so we can avoid write locks.
+     * Marks the graph folder as read-only, e.g. for a read-only filesystem: no lock file is
+     * created, the backing files are never modified and memory mapped DataAccess objects map them
+     * read-only (enforced by the OS).
      */
-    public GraphHopper setAllowWrites(boolean allowWrites) {
-        this.allowWrites = allowWrites;
+    public GraphHopper setReadOnly(boolean readOnly) {
+        this.readOnly = readOnly;
         return this;
     }
 
@@ -491,8 +484,9 @@ public class GraphHopper {
 
         defaultSegmentSize = ghConfig.getInt("graph.dataaccess.segment_size", defaultSegmentSize);
 
-        String daTypeString = ghConfig.getString("graph.dataaccess.default_type", ghConfig.getString("graph.dataaccess", "RAM_STORE"));
+        String daTypeString = ghConfig.getString("graph.dataaccess.default_type", ghConfig.getString("graph.dataaccess", "RAM"));
         dataAccessDefaultType = DAType.fromString(daTypeString);
+        readOnly = ghConfig.getBool("graph.read_only", readOnly);
         for (Map.Entry<String, Object> entry : ghConfig.asPMap().toMap().entrySet()) {
             if (entry.getKey().startsWith("graph.dataaccess.type."))
                 dataAccessConfig.put(entry.getKey().substring("graph.dataaccess.type.".length()), entry.getValue().toString());
@@ -749,7 +743,7 @@ public class GraphHopper {
             if (baseURL.isEmpty() && ghConfig.has("graph.elevation.baseurl"))
                 throw new IllegalArgumentException("use graph.elevation.base_url not baseurl in configuration");
 
-            DAType elevationDAType = DAType.fromString(ghConfig.getString("graph.elevation.dataaccess", "MMAP"));
+            DAType elevationDAType = DAType.fromString(ghConfig.getString("graph.elevation.dataaccess", "FOREIGN_MMAP"));
 
             provider
                     .setAutoRemoveTemporaryFiles(removeTempElevationFiles)
@@ -804,7 +798,7 @@ public class GraphHopper {
      * Imports and processes data, storing it to disk when complete.
      */
     public void importAndClose() {
-        if (!load()) {
+        if (!load(true)) {
             printInfo();
             process(true);
         } else {
@@ -825,6 +819,7 @@ public class GraphHopper {
         directory.configure(dataAccessConfig);
         baseGraph = new BaseGraph.Builder(getEncodingManager())
                 .setDir(directory)
+                .setFileBacked(fileBacked)
                 .set3D(hasElevation())
                 .withTurnCosts(encodingManager.needsTurnCostsSupport())
                 .build();
@@ -833,7 +828,7 @@ public class GraphHopper {
 
         GHLock lock = null;
         try {
-            if (directory.getDefaultType().isStoring()) {
+            if (fileBacked) {
                 lockFactory.setLockDir(new File(ghLocation));
                 lock = lockFactory.create(fileLockName, true);
                 if (!lock.tryLock())
@@ -844,12 +839,15 @@ public class GraphHopper {
             importOSM();
             postImportOSM();
             cleanUp();
+            baseGraph.freeze();
 
             properties.put("profiles", getProfilesString());
             writeEncodingManagerToProperties();
+            calcChecksums();
 
-            postProcessing(closeEarly);
             flush();
+            postProcessing(closeEarly);
+            setFullyLoaded();
         } finally {
             if (lock != null)
                 lock.release();
@@ -888,11 +886,8 @@ public class GraphHopper {
 
         if (urbanDensityCalculationThreads > 0)
             encodedValuesWithProps.put(UrbanDensity.KEY, new PMap());
-        if (maxSpeedCalculator != null) {
-            if (urbanDensityCalculationThreads <= 0)
-                throw new IllegalArgumentException("For max_speed_calculator the urban density calculation needs to be enabled (e.g. graph.urban_density.threads: 1)");
+        if (maxSpeedCalculator != null)
             encodedValuesWithProps.put(MaxSpeedEstimated.KEY, new PMap());
-        }
 
         Map<String, ImportUnit> activeImportUnits = new LinkedHashMap<>();
         ArrayDeque<String> deque = new ArrayDeque<>(encodedValuesWithProps.keySet());
@@ -1064,7 +1059,6 @@ public class GraphHopper {
     }
 
     protected void createBaseGraphAndProperties() {
-        baseGraph.getDirectory().create();
         baseGraph.create(100);
         properties.create(100);
         if (maxSpeedCalculator != null)
@@ -1193,6 +1187,10 @@ public class GraphHopper {
      * Load from existing graph folder.
      */
     public boolean load() {
+        return load(false);
+    }
+
+    private boolean load(boolean closeEarly) {
         if (isEmpty(ghLocation))
             throw new IllegalStateException("GraphHopperLocation is not specified. Call setGraphHopperLocation or init before");
 
@@ -1214,21 +1212,17 @@ public class GraphHopper {
             }
         }
 
-        // todo: this does not really belong here, we abuse the load method to derive the dataAccessDefaultType setting from others
-        if (!allowWrites && dataAccessDefaultType.isMMap())
-            dataAccessDefaultType = DAType.MMAP_RO;
-
         if (!new File(ghLocation).exists())
             // there is just nothing to load
             return false;
 
-        GHDirectory directory = new GHDirectory(ghLocation, dataAccessDefaultType);
+        GHDirectory directory = new GHDirectory(ghLocation, dataAccessDefaultType).setReadOnly(readOnly);
         directory.configure(dataAccessConfig);
         GHLock lock = null;
         try {
             // create locks only if writes are allowed, if they are not allowed a lock cannot be created
             // (e.g. on a read only filesystem locks would fail)
-            if (directory.getDefaultType().isStoring() && isAllowWrites()) {
+            if (fileBacked && !readOnly) {
                 lockFactory.setLockDir(new File(ghLocation));
                 lock = lockFactory.create(fileLockName, false);
                 if (!lock.tryLock())
@@ -1242,6 +1236,7 @@ public class GraphHopper {
             encodingManager = EncodingManager.fromProperties(properties);
             baseGraph = new BaseGraph.Builder(encodingManager)
                     .setDir(directory)
+                    .setFileBacked(fileBacked)
                     .set3D(hasElevation())
                     .withTurnCosts(encodingManager.needsTurnCostsSupport())
                     .build();
@@ -1264,8 +1259,9 @@ public class GraphHopper {
                                 + "\nChange this profile to match the stored one or delete " + baseGraph.getDirectory().getLocation());
                 });
             }
-            postProcessing(false);
-            directory.loadMMap();
+            postProcessing(closeEarly);
+            if (!closeEarly)
+                directory.loadMMap();
             setFullyLoaded();
             return true;
         } finally {
@@ -1292,6 +1288,8 @@ public class GraphHopper {
         for (Profile profile : profilesByName.values()) {
             try {
                 createWeighting(profile, new PMap());
+                if (profile.getCustomModel() != null)
+                    CustomModelParser.checkParameterRanges(profile.getCustomModel(), encodingManager);
             } catch (IllegalArgumentException e) {
                 throw new IllegalArgumentException("Could not create weighting for profile: '" + profile.getName() + "'.\n" +
                         "Profile: " + profile + "\n" +
@@ -1382,7 +1380,6 @@ public class GraphHopper {
      * @param closeEarly release resources as early as possible
      */
     protected void postProcessing(boolean closeEarly) {
-        calcChecksums();
         initLocationIndex();
         importPublicTransit();
 
@@ -1391,7 +1388,7 @@ public class GraphHopper {
             if (!includesCustomProfiles)
                 // when there are custom profiles we must not close way geometry or KVStorage, because
                 // they might be needed to evaluate the custom weightings for the following preparations
-                baseGraph.flushAndCloseGeometryAndNameStorage();
+                baseGraph.closeGeometryAndNameStorage();
         }
 
         if (lmPreparationHandler.isEnabled())
@@ -1412,6 +1409,10 @@ public class GraphHopper {
         if (encodingManager.hasEncodedValue(RoadEnvironment.KEY)) {
             EnumEncodedValue<RoadEnvironment> roadEnvEnc = encodingManager.getEnumEncodedValue(RoadEnvironment.KEY, RoadEnvironment.class);
             StopWatch sw = new StopWatch().start();
+            // first step: fix the tower-end elevation values using the surrounding road network
+            new BridgeTunnelTowerCorrection(baseGraph.getBaseGraph(), roadEnvEnc).execute();
+            float towerCorrection = sw.stop().getSeconds();
+            sw = new StopWatch().start();
             new EdgeElevationInterpolator(baseGraph.getBaseGraph(), roadEnvEnc, RoadEnvironment.TUNNEL).execute();
             float tunnel = sw.stop().getSeconds();
             sw = new StopWatch().start();
@@ -1421,7 +1422,7 @@ public class GraphHopper {
             // See #2098 for mor information
             sw = new StopWatch().start();
             new EdgeElevationInterpolator(baseGraph.getBaseGraph(), roadEnvEnc, RoadEnvironment.FERRY).execute();
-            logger.info("Bridge interpolation " + (int) bridge + "s, " + "tunnel interpolation " + (int) tunnel + "s, ferry interpolation " + (int) sw.stop().getSeconds() + "s");
+            logger.info("Tower correction " + (int) towerCorrection + "s, bridge interpolation " + (int) bridge + "s, tunnel interpolation " + (int) tunnel + "s, ferry interpolation " + (int) sw.stop().getSeconds() + "s");
         }
     }
 
@@ -1468,6 +1469,8 @@ public class GraphHopper {
         if (!tmpIndex.loadExisting()) {
             ensureWriteAccess();
             tmpIndex.prepareIndex();
+            if (fileBacked)
+                tmpIndex.flush();
         }
 
         return tmpIndex;
@@ -1539,6 +1542,8 @@ public class GraphHopper {
         // we load ch graphs that already exist and prepare the other ones
         List<CHConfig> chConfigs = createCHConfigs(chPreparationHandler.getCHProfiles());
         Map<String, RoutingCHGraph> loaded = chPreparationHandler.load(baseGraph.getBaseGraph(), chConfigs);
+        if (closeEarly)
+            loaded.values().forEach(RoutingCHGraph::close);
         List<CHConfig> configsToPrepare = chConfigs.stream().filter(c -> !loaded.containsKey(c.getName())).collect(Collectors.toList());
         Map<String, PrepareContractionHierarchies.Result> prepared = prepareCH(closeEarly, configsToPrepare);
 
@@ -1556,6 +1561,8 @@ public class GraphHopper {
             } else
                 throw new IllegalStateException("CH graph should be either loaded or prepared: " + profile.getProfile());
         }
+        if (fileBacked && !prepared.isEmpty())
+            properties.flush();
         chGraphs.forEach((name, ch) -> {
             CHStorage store = ((RoutingCHGraphImpl) ch).getCHStorage();
             logger.info("CH available for profile {}, {}MB, {}, ({}MB)", name, Helper.nf(store.getCapacity() / Helper.MB), store.toDetailsString(), store.getMB());
@@ -1567,7 +1574,7 @@ public class GraphHopper {
             ensureWriteAccess();
         if (!baseGraph.isFrozen())
             baseGraph.freeze();
-        return chPreparationHandler.prepare(baseGraph, properties, configsToPrepare, closeEarly);
+        return chPreparationHandler.prepare(baseGraph, properties, configsToPrepare, closeEarly, fileBacked);
     }
 
     /**
@@ -1582,6 +1589,8 @@ public class GraphHopper {
         // we load landmark storages that already exist and prepare the other ones
         List<LMConfig> lmConfigs = createLMConfigs(lmPreparationHandler.getLMProfiles());
         List<LandmarkStorage> loaded = lmPreparationHandler.load(lmConfigs, baseGraph, encodingManager);
+        if (closeEarly)
+            loaded.forEach(LandmarkStorage::close);
         List<LMConfig> loadedConfigs = loaded.stream().map(LandmarkStorage::getLMConfig).toList();
         List<LMConfig> configsToPrepare = lmConfigs.stream().filter(c -> !loadedConfigs.contains(c)).collect(Collectors.toList());
         List<PrepareLandmarks> prepared = prepareLM(closeEarly, configsToPrepare);
@@ -1601,6 +1610,8 @@ public class GraphHopper {
             } else
                 loadedLMS.ifPresent(landmarkStorage -> landmarks.put(lmp.getProfile(), landmarkStorage));
         }
+        if (fileBacked && !prepared.isEmpty())
+            properties.flush();
     }
 
     protected List<PrepareLandmarks> prepareLM(boolean closeEarly, List<LMConfig> configsToPrepare) {
@@ -1608,7 +1619,7 @@ public class GraphHopper {
             ensureWriteAccess();
         if (!baseGraph.isFrozen())
             baseGraph.freeze();
-        return lmPreparationHandler.prepare(configsToPrepare, baseGraph, encodingManager, properties, locationIndex, closeEarly);
+        return lmPreparationHandler.prepare(configsToPrepare, baseGraph, encodingManager, properties, locationIndex, closeEarly, fileBacked);
     }
 
     /**
@@ -1633,12 +1644,13 @@ public class GraphHopper {
     }
 
     protected void flush() {
-        logger.info("flushing graph " + getBaseGraphString() + ", details:" + baseGraph.toDetailsString() + ", "
-                + getMemInfo() + ")");
-        baseGraph.flush();
-        properties.flush();
-        logger.info("flushed graph " + getMemInfo() + ")");
-        setFullyLoaded();
+        if (fileBacked) {
+            logger.info("flushing graph " + getBaseGraphString() + ", details:" + baseGraph.toDetailsString() + ", "
+                    + getMemInfo() + ")");
+            baseGraph.flush();
+            properties.flush();
+            logger.info("flushed graph " + getMemInfo() + ")");
+        }
     }
 
     /**
@@ -1682,8 +1694,8 @@ public class GraphHopper {
     }
 
     protected void ensureWriteAccess() {
-        if (!allowWrites)
-            throw new IllegalStateException("Writes are not allowed!");
+        if (readOnly)
+            throw new IllegalStateException("Writes are not allowed: read-only mode was explicitly enabled");
     }
 
     private void setFullyLoaded() {
@@ -1776,7 +1788,12 @@ public class GraphHopper {
                                 // 2. try to load custom model file from external location
                                 string = readJSONFileWithoutComments(customModelFile.toFile().getAbsolutePath());
                             }
-                            customModel = CustomModel.merge(customModel, jsonOM.readValue(string, CustomModel.class));
+                            CustomModel fileModel = jsonOM.readValue(string, CustomModel.class);
+                            for (String name : fileModel.getParameters().keySet())
+                                if (customModel.getParameters().containsKey(name))
+                                    throw new IllegalArgumentException("parameter '" + name + "' of custom model file '" + file
+                                            + "' is already defined in a previous custom model, profile: " + profile.getName());
+                            customModel = CustomModel.merge(customModel, fileModel);
                         } catch (IOException ex) {
                             throw new RuntimeException("Cannot load custom_model from location " + file + ", profile:" + profile.getName(), ex);
                         }

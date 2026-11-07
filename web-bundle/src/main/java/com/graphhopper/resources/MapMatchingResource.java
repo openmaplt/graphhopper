@@ -136,10 +136,11 @@ public class MapMatchingResource {
 
         sw.stop();
         logger.info(objectMapper.createObjectNode()
-                .put("duration", sw.getNanos())
+                .put("took", sw.getMillisDouble())
                 .put("profile", profile)
                 .put("observations", measurements.size())
-                .putPOJO("mapmatching", matching.getStatistics()).toString());
+                .put("original_distance", matchResult.getGpxEntriesLength())
+                .put("distance", matchResult.getMatchLength()).toString());
 
         if (debugMode) {
             return Response.ok(matching.getDebugInfo()).
@@ -153,6 +154,7 @@ public class MapMatchingResource {
             Translation tr = trMap.getWithFallBack(Helper.getLocale(localeStr));
             RamerDouglasPeucker simplifyAlgo = new RamerDouglasPeucker().setMaxDistance(minPathPrecision);
             PathMerger pathMerger = new PathMerger(matchResult.getGraph(), matchResult.getWeighting()).
+                    setInstructionsBaseMode(graphHopper.getInstructionsBaseMode(profile)).
                     setEnableInstructions(instructions).
                     setPathDetailsBuilders(graphHopper.getPathDetailsBuilderFactory(), pathDetails).
                     setRamerDouglasPeucker(simplifyAlgo).

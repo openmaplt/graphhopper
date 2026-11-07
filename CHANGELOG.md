@@ -1,5 +1,16 @@
 ### 12.0 [not yet released]
 
+- foot.json: a mapped sidewalk increases the priority of otherwise avoided roads like primary by 10%, add `sidewalk` to graph.encoded_values; foot_priority now also reads sidewalk:both and sidewalk:left+right for no/none/separate, as foot_road_access does
+- max_speed_calculator: a country-wide fallback above 50km/h is no longer used for urban roads, e.g. 55mph for US-NY where the wiki has no urban entry. Such roads keep max_speed=Infinity, use max_speed_estimated to detect this. max_speed_estimated is now stored per direction (requires reimport)
+- mtb: base speed on paved roads is 20km/h instead of 18 (matches the flat speed of a 140W cyclist on an mtb)
+- racingbike: base speed on paved roads is 28km/h instead of 24 (matches the flat speed of a 160W cyclist); smoothness=excellent no longer increases the speed for bike, mtb and racingbike (the physical gain of 1-2% is below the 2km/h resolution)
+- custom models: conditions accept only the binary operators ==, !=, <, >, <=, >=, &&, ||, +, -, *, / and %; bitwise and shift operators like &, |, ^, << and >> are rejected now
+- custom models: new `parameters` section with named numbers and booleans usable in conditions and value expressions (a parameter xy is referenced as p_xy); parameters can only be defined in the server-side custom model, optionally with an allowed value range; on merge the values are overridden per name, so a request can tweak the values of the server-side profile without repeating its statements (and without recompiling the custom model class); empty speed/priority/turn_penalty sections are no longer serialized
+- breaking: road_access now contains DESIGNATED and DISCOURAGED. All custom models using road_access == YES or road_access != YES need to consider this.
+- hgv deprecated. Use hgv_road_access that also considers other access tags similar to road_access.
+- the profile parameter instructions_base_mode (car, bike or foot) replaces navigation_mode and is derived from the profile name if not specified, with car as fallback (#3394)
+- several changes regarding DAType (#3382) including constructor parameters of DataAccess
+- the roundabout instruction can now be split into two instructions: the first one has turn_angle and the second has exited==true. Enable via the request parameter roundabout_exits=true (default is false)
 - weightings are now expected to return whole numbers, the built-in weightings (most importantly CustomWeighting) now return x10 their previous value (#3297) 
 - the default value for `graph.elevation.clear` changed to false as is much better when the cached tiles can be reused
 - artificial tag way_distance does no longer include the elevation => renamed to way_distance_2d
@@ -7,6 +18,7 @@
 - OSMReader no longer sets the artificial speed_from_duration tag but instead uses duration_in_seconds, when the duration tag is present (#3266)
 - country rules were moved into parsers and are now enabled by default
 - speeds generated from highway class now respects country-specific default speed limits, but the max_speed encoded value is now required; see #3249
+- subnetwork search now uses ~35% less memory, which potentially allows higher values of prepare.subnetworks.threads  
 
 ### 11.0 [14 Oct 2025]
 

@@ -56,10 +56,12 @@ public class FootTagParserTest {
             .add(FerrySpeed.create())
             .build();
     private final FootAccessParser accessParser = new FootAccessParser(encodingManager, new PMap());
+    private final FootAccessParser allowPrivateAccessParser = new FootAccessParser(encodingManager, new PMap());
     private final FootAverageSpeedParser speedParser = new FootAverageSpeedParser(encodingManager);
     private final FootPriorityParser prioParser = new FootPriorityParser(encodingManager);
 
     public FootTagParserTest() {
+        allowPrivateAccessParser.blockPrivate(false);
     }
 
     @Test
@@ -198,6 +200,20 @@ public class FootTagParserTest {
         way.setTag("access", "no");
         assertTrue(accessParser.getAccess(way).isWay());
 
+    }
+
+    @Test
+    public void testUnknownFootValueDoesNotShadowAccess() {
+        // an unrecognized foot value must defer to access, not shadow it
+        ReaderWay way = new ReaderWay(1);
+        way.setTag("highway", "service");
+        way.setTag("access", "no");
+        way.setTag("foot", "unknownvalue");
+        assertTrue(accessParser.getAccess(way).canSkip());
+
+        // but without any restriction it stays allowed
+        way.removeTag("access");
+        assertTrue(accessParser.getAccess(way).isWay());
     }
 
     @Test
@@ -366,8 +382,6 @@ public class FootTagParserTest {
         way.clearTags();
         way.setTag("highway", "tertiary");
         assertPriority(PriorityCode.UNCHANGED, way);
-        way.setTag("foot", "use_sidepath");
-        assertPriority(PriorityCode.VERY_BAD, way);
 
         way.clearTags();
         way.setTag("highway", "tertiary");
@@ -408,6 +422,10 @@ public class FootTagParserTest {
         way.setTag("sidewalk", "no");
         assertPriority(PriorityCode.REACH_DESTINATION, way);
         way.setTag("sidewalk", "none");
+        assertPriority(PriorityCode.REACH_DESTINATION, way);
+        way.removeTag("sidewalk");
+        way.setTag("sidewalk:left", "no");
+        way.setTag("sidewalk:right", "separate");
         assertPriority(PriorityCode.REACH_DESTINATION, way);
 
         way.clearTags();
@@ -500,6 +518,30 @@ public class FootTagParserTest {
         node.setTag("barrier", "yes");
         node.setTag("access", "no");
         assertTrue(accessParser.isBarrier(node));
+
+        // test usage of xy_access|block_private=false
+        node.clearTags();
+        node.setTag("barrier", "gate");
+        assertFalse(allowPrivateAccessParser.isBarrier(node));
+        node.setTag("access", "private");
+        assertFalse(allowPrivateAccessParser.isBarrier(node));
+        node.setTag("locked", "yes");
+        assertTrue(allowPrivateAccessParser.isBarrier(node));
+
+        // Same test as before with other tag order
+        node.clearTags();
+        node.setTag("barrier", "gate");
+        node.setTag("locked", "yes");
+        assertTrue(allowPrivateAccessParser.isBarrier(node));
+        node.setTag("access", "private");
+        assertTrue(allowPrivateAccessParser.isBarrier(node));
+        node.setTag("access", "destination");
+        // See discussion in #3406. It is impossible to guess the intention for this combination.
+        // We block it because this simplifies the implementation logic.
+        // If someone wants to allow access for foot, they can add foot=yes.
+        assertTrue(allowPrivateAccessParser.isBarrier(node));
+        node.setTag("foot", "yes");
+        assertFalse(allowPrivateAccessParser.isBarrier(node));
     }
 
     @Test

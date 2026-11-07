@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static com.graphhopper.routing.ev.MaxSpeed.MAXSPEED_150;
@@ -141,6 +142,72 @@ class MaxSpeedCalculatorTest {
     }
 
     @Test
+    public void testUrbanMotorwayUsesRuralValue() {
+        // NLD has no "urban motorway" entry and the generic urban default (50km/h) must not apply,
+        // see https://github.com/westnordost/osm-legal-default-speeds/discussions/17
+        ReaderWay way = new ReaderWay(0L);
+        way.setTag("country", Country.NLD);
+        way.setTag("highway", "motorway");
+        EdgeIteratorState edge = createEdge(way).set(urbanDensity, CITY);
+        calc.fillMaxSpeed(graph, em);
+        assertEquals(130, edge.get(maxSpeedEnc), 1);
+
+        way = new ReaderWay(0L);
+        way.setTag("country", Country.USA);
+        way.setTag("country_state", State.US_CA);
+        way.setTag("highway", "motorway");
+        edge = createEdge(way).set(urbanDensity, CITY);
+        calc.fillMaxSpeed(graph, em);
+        assertEquals(105, edge.get(maxSpeedEnc), 1);
+
+        way = new ReaderWay(0L);
+        way.setTag("country", Country.USA);
+        way.setTag("country_state", State.US_CA);
+        way.setTag("highway", "trunk");
+        way.setTag("expressway", "yes");
+        edge = createEdge(way).set(urbanDensity, CITY);
+        calc.fillMaxSpeed(graph, em);
+        assertEquals(105, edge.get(maxSpeedEnc), 1);
+
+        // an explicit "urban motorway" entry still wins
+        way = new ReaderWay(0L);
+        way.setTag("country", Country.CZE);
+        way.setTag("highway", "motorway");
+        edge = createEdge(way).set(urbanDensity, CITY);
+        calc.fillMaxSpeed(graph, em);
+        assertEquals(80, edge.get(maxSpeedEnc), 1);
+    }
+
+    @Test
+    public void testAllRegions() {
+        // for every country and state: the urban motorway estimate is never absurdly below the rural one, see
+        // https://github.com/westnordost/osm-legal-default-speeds/discussions/17, and the urban residential estimate is
+        // not a rural fallback (88km/h for US-NY), i.e. not above the highest legal urban default (80km/h, THA) or the rural one
+        Map<String, EdgeIteratorState[]> edges = new HashMap<>();
+        for (Country country : Country.values()) {
+            if (country == Country.MISSING) continue;
+            for (State state : country.getStates().isEmpty() ? List.of(State.MISSING) : country.getStates()) {
+                ReaderWay way = new ReaderWay(0L);
+                way.setTag("country", country);
+                if (state != State.MISSING) way.setTag("country_state", state);
+                way.setTag("highway", "motorway");
+                EdgeIteratorState urbanMotorway = createEdge(way).set(urbanDensity, CITY), ruralMotorway = createEdge(way).set(urbanDensity, RURAL);
+                way.setTag("highway", "residential");
+                EdgeIteratorState urban = createEdge(way).set(urbanDensity, CITY);
+                way.setTag("highway", "primary");
+                edges.put(country + "|" + state, new EdgeIteratorState[]{urbanMotorway, ruralMotorway, urban, createEdge(way).set(urbanDensity, RURAL)});
+            }
+        }
+        calc.fillMaxSpeed(graph, em);
+        edges.forEach((region, e) -> {
+            double urbanMotorway = e[0].get(maxSpeedEnc), ruralMotorway = e[1].get(maxSpeedEnc);
+            assertTrue(urbanMotorway >= Math.min(80, ruralMotorway), region + ": urban motorway " + urbanMotorway + ", rural " + ruralMotorway);
+            double urban = e[2].get(maxSpeedEnc), rural = e[3].get(maxSpeedEnc);
+            assertTrue(urban == MAXSPEED_MISSING || urban <= 80 && urban <= rural, region + ": urban " + urban + ", rural " + rural);
+        });
+    }
+
+    @Test
     public void testRoundabout() {
         ReaderWay way = new ReaderWay(0L);
         way.setTag("country", Country.CRI);
@@ -240,6 +307,8 @@ class MaxSpeedCalculatorTest {
         calc.fillMaxSpeed(graph, em);
         assertEquals(50, edge.get(maxSpeedEnc), 1);
         assertEquals(100, edge.getReverse(maxSpeedEnc), 1);
+        assertFalse(edge.get(maxSpeedEstEnc));
+        assertTrue(edge.getReverse(maxSpeedEstEnc));
     }
 
     @Test
@@ -297,6 +366,36 @@ class MaxSpeedCalculatorTest {
         edge = createEdge(way).set(urbanDensity, RURAL);
         calc.fillMaxSpeed(graph, em);
         assertEquals(114, edge.get(maxSpeedEnc), 1);
+    }
+
+    @Test
+    public void testUrbanFallback() {
+        // US-NY has only a statewide 55mph. Without urban entry this rural value must not be used for urban roads.
+        ReaderWay way = new ReaderWay(0L);
+        way.setTag("country", Country.USA);
+        way.setTag("country_state", State.US_NY);
+        way.setTag("highway", "residential");
+        EdgeIteratorState urban = createEdge(way).set(urbanDensity, CITY);
+        EdgeIteratorState rural = createEdge(way).set(urbanDensity, RURAL);
+        way.setTag("highway", "motorway");
+        EdgeIteratorState urbanMotorway = createEdge(way).set(urbanDensity, CITY);
+        // states with urban entry are unchanged
+        way.setTag("highway", "residential");
+        way.setTag("country_state", State.US_TX);
+        EdgeIteratorState urbanTX = createEdge(way).set(urbanDensity, CITY);
+        // a low fallback is kept, e.g. for city states
+        way = new ReaderWay(0L);
+        way.setTag("country", Country.HKG);
+        way.setTag("highway", "primary");
+        EdgeIteratorState hkg = createEdge(way).set(urbanDensity, CITY);
+        calc.fillMaxSpeed(graph, em);
+
+        assertEquals(MAXSPEED_MISSING, urban.get(maxSpeedEnc));
+        assertFalse(urban.get(maxSpeedEstEnc));
+        assertEquals(90, rural.get(maxSpeedEnc));
+        assertEquals(90, urbanMotorway.get(maxSpeedEnc));
+        assertEquals(48, urbanTX.get(maxSpeedEnc));
+        assertEquals(50, hkg.get(maxSpeedEnc));
     }
 
     @Test

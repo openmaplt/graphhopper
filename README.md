@@ -7,8 +7,8 @@ It can be used as a Java library or standalone web server to calculate the dista
 turn-by-turn instructions and many road attributes for a route between two or more points.
 Beyond this "A-to-B" routing it supports ["snap to road"](README.md#Map-Matching),
 [Isochrone calculation](README.md#Analysis), [mobile navigation](README.md#mobile-apps) and
-[more](README.md#Features). GraphHopper uses OpenStreetMap and GTFS data by default and it
-can import [other data sources too](README.md#OpenStreetMap-Support).
+[more](README.md#Features). GraphHopper uses OpenStreetMap and GTFS data by default, along
+with precise elevation data, and can also import [other data sources](README.md#OpenStreetMap-Support).
 
 # Community
 
@@ -32,7 +32,7 @@ to get started with contribution.
 To get started you can try [GraphHopper Maps](README.md#graphhopper-maps), read through [our documentation](./docs/index.md) and install GraphHopper including the Maps UI locally.
 
 * 11.x: [documentation](https://github.com/graphhopper/graphhopper/blob/11.x/docs/index.md)
-  , [web service jar](https://repo1.maven.org/maven2/com/graphhopper/graphhopper-web/11.0/graphhopper-web-11.0.jar)
+  , [web service jar](https://repo1.maven.org/maven2/com/graphhopper/graphhopper-web/11.1/graphhopper-web-11.1.jar)
   , [announcement](https://www.graphhopper.com/blog/2025/10/14/graphhopper-routing-engine-11-0-released/)
 * unstable master: [documentation](https://github.com/graphhopper/graphhopper/blob/master/docs/index.md)
 
@@ -103,10 +103,10 @@ See the [changelog file](./CHANGELOG.md) for Java API Changes.
 
 ## Installation
 
-To install the [GraphHopper Maps](https://graphhopper.com/maps/) UI and the web service locally you [need a JVM](https://adoptium.net) (>= Java 17) and do:
+To install the [GraphHopper Maps](https://graphhopper.com/maps/) UI and the web service locally you [need a JVM](https://adoptium.net) (>= Java 25) and do:
 
 ```bash
-wget https://repo1.maven.org/maven2/com/graphhopper/graphhopper-web/11.0/graphhopper-web-11.0.jar \
+wget https://repo1.maven.org/maven2/com/graphhopper/graphhopper-web/11.1/graphhopper-web-11.1.jar \
   https://raw.githubusercontent.com/graphhopper/graphhopper/11.x/config-example.yml \
   http://download.geofabrik.de/europe/germany/berlin-latest.osm.pbf
 java -D"dw.graphhopper.datareader.file=berlin-latest.osm.pbf" -jar graphhopper*.jar server config-example.yml

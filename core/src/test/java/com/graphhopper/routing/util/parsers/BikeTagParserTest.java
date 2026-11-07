@@ -340,6 +340,15 @@ public class BikeTagParserTest extends AbstractBikeTagParserTester {
         way.setTag("surface", "unknown_surface");
         assertPriorityAndSpeed(UNCHANGED, PUSHING_SECTION_SPEED, way);
 
+        way.setTag("surface", "mud");
+        assertPriorityAndSpeed(UNCHANGED, PUSHING_SECTION_SPEED, way);
+
+        way.setTag("surface", "clay");
+        assertPriorityAndSpeed(UNCHANGED, 8, way);
+
+        way.setTag("surface", "laterite");
+        assertPriorityAndSpeed(UNCHANGED, 6, way);
+
         way.clearTags();
         way.setTag("highway", "track");
         way.setTag("surface", "gravel");
@@ -352,7 +361,7 @@ public class BikeTagParserTest extends AbstractBikeTagParserTester {
         ReaderWay way = new ReaderWay(1);
         way.setTag("highway", "residential");
         way.setTag("smoothness", "excellent");
-        assertEquals(20, getSpeedFromFlags(way), 0.01);
+        assertEquals(18, getSpeedFromFlags(way), 0.01);
 
         way.setTag("smoothness", "bad");
         assertEquals(12, getSpeedFromFlags(way), 0.01);
@@ -507,6 +516,20 @@ public class BikeTagParserTest extends AbstractBikeTagParserTester {
         way.setTag("vehicle", "forestry");
         assertTrue(accessParser.getAccess(way).isWay());
         way.setTag("vehicle", "agricultural;forestry");
+        assertTrue(accessParser.getAccess(way).isWay());
+    }
+
+    @Test
+    public void testUnknownBicycleValueDoesNotShadowAccess() {
+        // an unrecognized bicycle value must defer to access, not shadow it
+        ReaderWay way = new ReaderWay(1);
+        way.setTag("highway", "service");
+        way.setTag("access", "no");
+        way.setTag("bicycle", "unknownvalue");
+        assertTrue(accessParser.getAccess(way).canSkip());
+
+        // but without any restriction it stays allowed
+        way.removeTag("access");
         assertTrue(accessParser.getAccess(way).isWay());
     }
 

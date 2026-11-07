@@ -6,15 +6,25 @@ import com.graphhopper.routing.ev.DecimalEncodedValueImpl;
 import com.graphhopper.routing.ev.EncodedValueLookup;
 import com.graphhopper.routing.ev.IntEncodedValueImpl;
 import com.graphhopper.routing.util.EncodingManager;
+import com.graphhopper.util.CustomModel;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.Map;
 import java.util.Set;
 
 import static com.graphhopper.routing.weighting.custom.ValueExpressionVisitor.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ValueExpressionVisitorTest {
+
+    static Set<String> findVariables(String valueExpression, EncodedValueLookup lookup) {
+        return ValueExpressionVisitor.findVariables(valueExpression, Map.of(), lookup);
+    }
+
+    static MinMax findMinMax(String valueExpression, EncodedValueLookup lookup) {
+        return ValueExpressionVisitor.findMinMax(valueExpression, Map.of(), lookup);
+    }
 
     @Test
     public void protectUsFromStuff() {
@@ -44,6 +54,13 @@ class ValueExpressionVisitorTest {
         assertTrue(result.ok, result.invalidMessage);
         assertEquals("[my_speed]", result.guessedVariables.toString());
 
+        result = parse("Math.min(my_speed, 10)", (arg) -> arg.equals("my_speed"));
+        assertTrue(result.ok, result.invalidMessage);
+        assertEquals("[my_speed]", result.guessedVariables.toString());
+        result = parse("1 - 0.1 * Math.max(0.5, my_speed)", (arg) -> arg.equals("my_speed"));
+        assertTrue(result.ok, result.invalidMessage);
+        assertFalse(parse("Math.pow(my_speed, 2)", (arg) -> arg.equals("my_speed")).ok);
+
         result = parse("edge.getDistance()", (arg) -> false);
         assertFalse(result.ok);
 
@@ -63,6 +80,60 @@ class ValueExpressionVisitorTest {
         // assertTrue(parse("Math.sqrt(road_class.ordinal())", validVariable).ok);
     }
 
+
+    @Test
+    public void convertedIsBuiltFromParsedValue() {
+        NameValidator valid = s -> s.equals("my_speed");
+        // comments, line breaks and unicode escapes do not reach the compiler
+        assertEquals("my_speed * 0.9", parse("my_speed/* c */*0.9", valid).converted);
+        assertEquals("0.5 * 2", parse("0.5 //\\u000a* 2", valid).converted);
+        assertEquals("my_speed + 1", parse("my\\u005fspeed\n+\t1", valid).converted);
+        assertEquals("Math.min(my_speed, (1 - 0.2))", parse("Math.min(my_speed,(1-0.2))", valid).converted);
+        // two unary minus must not become the decrement operator
+        assertEquals("- -my_speed", parse("- -my_speed", valid).converted);
+
+        // A value is a number: no text, char, boolean or null. Text was never executable, as it stays in its
+        // quotes and the compiler rejects it for its type. Now the check rejects it before the compiler.
+        for (String toParse : Arrays.asList("\"abc\"", "'c'", "Math.sqrt(\"x\")", "true", "null", "Math.sqrt()",
+                "Math.sqrt(2).intValue()", "0.5 //\\u000a* System.exit(1)",
+                "1 + \"); call(); (\"", "1 + ')'")) {
+            ParseResult res = parse(toParse, valid);
+            assertFalse(res.ok, "should be rejected: " + toParse);
+            assertNull(res.converted, toParse);
+            assertNotNull(res.invalidMessage, toParse);
+        }
+    }
+
+    @Test
+    public void parameterUsedOnceCannotBeBypassed() {
+        EncodedValueLookup lookup = new EncodingManager.Builder().build();
+        Map<String, CustomModel.Parameter> params = Map.of("factor", new CustomModel.Parameter(0.8));
+        // the second usage is written with a unicode escape for the underscore
+        String msg = assertThrows(IllegalArgumentException.class,
+                () -> ValueExpressionVisitor.findVariables("p_factor * p\\u005ffactor", params, lookup)).getMessage();
+        assertTrue(msg.contains("must not be used more than once"), msg);
+        // a parameter name in a comment is no usage
+        assertEquals(Set.of(), ValueExpressionVisitor.findVariables("2 /* p_factor */", params, lookup));
+    }
+
+    @Test
+    public void parameters() {
+        DecimalEncodedValue prio = new DecimalEncodedValueImpl("my_priority", 5, 1, false);
+        EncodedValueLookup lookup = new EncodingManager.Builder().add(prio).build();
+        Map<String, CustomModel.Parameter> params = Map.of("factor", new CustomModel.Parameter(0.8), "negative", new CustomModel.Parameter(-2));
+
+        // a lone parameter takes the fast path for numbers (no ExpressionEvaluator)
+        assertEquals(Set.of("p_factor"), ValueExpressionVisitor.findVariables("p_factor", params, lookup));
+        assertInterval(0.8, 0.8, ValueExpressionVisitor.findMinMax(" p_factor ", params, lookup));
+        String msg = assertThrows(IllegalArgumentException.class, () -> ValueExpressionVisitor.findVariables("p_negative", params, lookup)).getMessage();
+        assertTrue(msg.contains("negative weight"), msg);
+
+        // combined with other terms the parameter is substituted for the evaluator
+        assertInterval(1.6, 1.6, ValueExpressionVisitor.findMinMax("2 * p_factor", params, lookup));
+        assertInterval(-4, -4, ValueExpressionVisitor.findMinMax("2 * p_negative", params, lookup));
+        assertInterval(0, 24.8, ValueExpressionVisitor.findMinMax("p_factor * my_priority", params, lookup));
+        assertEquals(Set.of("p_factor", "my_priority"), ValueExpressionVisitor.findVariables("p_factor * my_priority", params, lookup));
+    }
 
     @Test
     public void testErrors() {
@@ -119,6 +190,10 @@ class ValueExpressionVisitorTest {
         assertInterval(2, 2, "2", lookup);
 
         assertInterval(0, 62, "2*my_priority", lookup);
+        // Math.min and Math.max are monotone, so the bounds from the range endpoints are exact
+        assertInterval(0, 10, "Math.min(my_priority, 10)", lookup);
+        assertInterval(10, 31, "Math.max(10, my_priority)", lookup);
+        assertInterval(0.7, 1, "1 - 0.03 * Math.min(my_priority, 10)", lookup);
 
         assertInterval(-52, 10, "-2*my_priority2", lookup);
     }
@@ -137,8 +212,11 @@ class ValueExpressionVisitorTest {
     }
 
     void assertInterval(double min, double max, String expression, EncodedValueLookup lookup) {
-        MinMax minmax = findMinMax(expression, lookup);
-        assertEquals(min, minmax.min, 0.1, expression);
-        assertEquals(max, minmax.max, 0.1, expression);
+        assertInterval(min, max, findMinMax(expression, lookup));
+    }
+
+    void assertInterval(double min, double max, MinMax minmax) {
+        assertEquals(min, minmax.min, 0.1);
+        assertEquals(max, minmax.max, 0.1);
     }
 }

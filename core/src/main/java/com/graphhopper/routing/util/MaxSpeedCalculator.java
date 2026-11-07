@@ -163,7 +163,7 @@ public class MaxSpeedCalculator {
                     iter.set(maxSpeedEnc,
                             fwdMaxSpeedPureOSM == MaxSpeed.MAXSPEED_MISSING ? maxSpeed : fwdMaxSpeedPureOSM,
                             bwdMaxSpeedPureOSM == MaxSpeed.MAXSPEED_MISSING ? maxSpeed : bwdMaxSpeedPureOSM);
-                    iter.set(maxSpeedEstEnc, true);
+                    iter.set(maxSpeedEstEnc, fwdMaxSpeedPureOSM == MaxSpeed.MAXSPEED_MISSING, bwdMaxSpeedPureOSM == MaxSpeed.MAXSPEED_MISSING);
                 }
             }
         }
@@ -179,7 +179,7 @@ public class MaxSpeedCalculator {
         if (!encodingManager.hasEncodedValue(Country.KEY))
             throw new IllegalArgumentException("max_speed_calculator needs country");
         if (!encodingManager.hasEncodedValue(UrbanDensity.KEY))
-            throw new IllegalArgumentException("max_speed_calculator needs urban_density");
+            throw new IllegalArgumentException("max_speed_calculator needs urban_density. Enable via e.g. graph.urban_density.threads: 1");
     }
 
     static class SpeedLimitsJson {

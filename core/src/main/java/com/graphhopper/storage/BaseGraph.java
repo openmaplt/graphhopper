@@ -55,6 +55,8 @@ public class BaseGraph implements Graph, Closeable {
     private static final int MAX_PILLAR_NODES = 65535;
     // Worst-case bytes per varint-encoded signed int.
     private static final int MAX_VARINT_BYTES = 5;
+    // Pillar elevation is stored in 5cm units (node elevation in mm) as DEM accuracy is far below that.
+    private static final int PILLAR_ELE_FACTOR = 50;
     final BaseGraphNodesAndEdges store;
     final NodeAccess nodeAccess;
     final KVStorage edgeKVStorage;
@@ -71,10 +73,10 @@ public class BaseGraph implements Graph, Closeable {
     private record EncodedBytes(byte[] bytes, int length) {
     }
 
-    public BaseGraph(Directory dir, boolean withElevation, boolean withTurnCosts, int bytesForFlags) {
+    public BaseGraph(Directory dir, DataAccess wayGeometry, boolean withElevation, boolean withTurnCosts, int bytesForFlags) {
         this.dir = dir;
         this.bitUtil = BitUtil.LITTLE;
-        this.wayGeometry = dir.create("geometry", dir.getDefaultType().isStoring() ? DAType.MMAP : dir.getDefaultType());
+        this.wayGeometry = wayGeometry;
         this.edgeKVStorage = new KVStorage(dir, true);
         this.store = new BaseGraphNodesAndEdges(dir, withElevation, withTurnCosts, bytesForFlags);
         this.nodeAccess = new GHNodeAccess(store);
@@ -184,7 +186,6 @@ public class BaseGraph implements Graph, Closeable {
 
     public BaseGraph create(long initSize) {
         checkNotInitialized();
-        dir.create();
         store.create(initSize);
 
         initSize = Math.min(initSize, 2000);
@@ -207,15 +208,10 @@ public class BaseGraph implements Graph, Closeable {
     }
 
     /**
-     * Flush and free resources that are not needed for post-processing (way geometries and KVStorage for edges).
+     * Frees the resources not needed for post-processing (way geometries and KVStorage for edges).
      */
-    public void flushAndCloseGeometryAndNameStorage() {
-        setWayGeometryHeader();
-
-        wayGeometry.flush();
+    public void closeGeometryAndNameStorage() {
         wayGeometry.close();
-
-        edgeKVStorage.flush();
         edgeKVStorage.close();
     }
 
@@ -501,6 +497,15 @@ public class BaseGraph implements Graph, Closeable {
             wayGeometry.ensureCapacity(geoRef + encoded.length);
             wayGeometry.setBytes(geoRef, encoded.bytes, encoded.length);
             store.setGeoRef(edgePointer, geoRef);
+            if (existingGeoRef > 0) {
+                // copies of this edge (see copyEdge) share the geometry and are identified by it, so they move too
+                EdgeIterator iter = createEdgeExplorer().setBaseNode(store.getNodeA(edgePointer));
+                while (iter.next()) {
+                    long copyPointer = ((EdgeIteratorStateImpl) iter).edgePointer;
+                    if (store.getGeoRef(copyPointer) == existingGeoRef)
+                        store.setGeoRef(copyPointer, geoRef);
+                }
+            }
         } else {
             store.setGeoRef(edgePointer, 0L);
         }
@@ -513,7 +518,7 @@ public class BaseGraph implements Graph, Closeable {
     /**
      * Creates bytes from the geometry for storage. First comes 1 byte for the bytes length L if L < 0xFF.
      * If more bytes are required then L == 0xFF and 4 more bytes are required.
-     * Then come the pillar bytes: for each coordinate the zigzag-varint Δlat, Δlon, (Δele if 3D) is calculated.
+     * Then come the pillar bytes: for each coordinate the zigzag-varint Δlat, Δlon, (Δele in 5cm units if 3D) is calculated.
      * @return The bytes in EncodedBytes may be over-allocated, i.e. use EncodedBytes.length and not EncodedBytes.bytes.length.
      */
     private EncodedBytes createWayGeometryBytes(PointList pillarNodes, boolean reverse) {
@@ -541,7 +546,7 @@ public class BaseGraph implements Graph, Closeable {
             prevLat = lat;
             prevLon = lon;
             if (is3D) {
-                int ele = Helper.eleToUInt(pillarNodes.getEle(i));
+                int ele = toPillarEle(Helper.eleToUInt(pillarNodes.getEle(i)));
                 offset = writeZigZagVarInt(bytes, offset, ele - prevEle);
                 prevEle = ele;
             }
@@ -556,6 +561,10 @@ public class BaseGraph implements Graph, Closeable {
         bytes[0] = (byte) 0xFF;
         bitUtil.fromInt(bytes, pillarBytesLen, 1);
         return new EncodedBytes(bytes, 5 + pillarBytesLen);
+    }
+
+    private static int toPillarEle(int eleUInt) {
+        return (eleUInt + PILLAR_ELE_FACTOR / 2) / PILLAR_ELE_FACTOR;
     }
 
     private static int writeZigZagVarInt(byte[] bytes, int offset, int value) {
@@ -640,7 +649,7 @@ public class BaseGraph implements Graph, Closeable {
             double lon = Helper.intToDegree((int) curLon);
             if (is3D) {
                 curEle += readZigZagVarInt(bytes, pos);
-                pillarNodes.add(lat, lon, Helper.uIntToEle(curEle));
+                pillarNodes.add(lat, lon, Helper.uIntToEle(curEle * PILLAR_ELE_FACTOR));
             } else {
                 pillarNodes.add(lat, lon);
             }
@@ -691,6 +700,9 @@ public class BaseGraph implements Graph, Closeable {
         private Directory directory = new GHDirectory("", DAType.RAM);
         private boolean withElevation = false;
         private boolean withTurnCosts = false;
+        // true = way geometry uses the memory mapped FOREIGN_MMAP, false = on-heap. Whether the
+        // graph is actually written to disc is a separate decision made by the caller (via flush).
+        private boolean fileBacked = false;
         private long bytes = 100;
 
         public Builder(EncodingManager em) {
@@ -705,6 +717,16 @@ public class BaseGraph implements Graph, Closeable {
         // todo: maybe rename later, but for now this makes it easier to replace GraphBuilder
         public Builder setDir(Directory directory) {
             this.directory = directory;
+            return this;
+        }
+
+        /**
+         * @param fileBacked true if the graph is meant to be persisted: the way geometry then uses
+         *                   the memory mapped FOREIGN_MMAP instead of an on-heap DataAccess. Whether
+         *                   the graph is actually flushed to disc is decided by the caller.
+         */
+        public Builder setFileBacked(boolean fileBacked) {
+            this.fileBacked = fileBacked;
             return this;
         }
 
@@ -726,7 +748,8 @@ public class BaseGraph implements Graph, Closeable {
         }
 
         public BaseGraph build() {
-            return new BaseGraph(directory, withElevation, withTurnCosts, bytesForFlags);
+            DataAccess wayGeometry = directory.create("geometry", fileBacked ? DAType.FOREIGN_MMAP : directory.getDefaultType());
+            return new BaseGraph(directory, wayGeometry, withElevation, withTurnCosts, bytesForFlags);
         }
 
         public BaseGraph create() {

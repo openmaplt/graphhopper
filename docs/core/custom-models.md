@@ -76,7 +76,8 @@ encoded values are the following (some of their possible values are given in bra
 
 - road_class: (OTHER, MOTORWAY, TRUNK, PRIMARY, SECONDARY, TRACK, STEPS, CYCLEWAY, FOOTWAY, ...)
 - road_environment: (ROAD, FERRY, BRIDGE, TUNNEL, ...)
-- road_access: (DESTINATION, DELIVERY, PRIVATE, NO, ...)
+- road_access: (DESIGNATED, YES, DISCOURAGED, DESTINATION, DELIVERY, PRIVATE, NO, ...)
+- hgv_road_access: like road_access but the hgv tag wins over motor_vehicle, vehicle and access
 - surface: (PAVED, DIRT, SAND, GRAVEL, ...)
 - sidewalk: (YES, SEPARATE, NO, ...) stores two directions
 - cycleway: (TRACK, LANE, SEPARATE, NO, ...) stores two directions
@@ -86,7 +87,7 @@ encoded values are the following (some of their possible values are given in bra
 - country: (`MISSING` or the country as a `ISO3166-1:alpha3` code e.g. `DEU`)
 - state: (`MISSING` or the state as `ISO3166-2` code e.g. `US_CA`)
 - hazmat: (YES, NO), hazmat_tunnel: (A, B, .., E), hazmat_water: (YES, PERMISSIVE, NO)
-- hgv: (MISSING, YES, DESIGNATED, ...)
+- hgv: (MISSING, YES, DESIGNATED, ...), deprecated, use hgv_road_access
 - track_type: (MISSING, GRADE1, GRADE2, ..., GRADE5)
 - urban_density: (RURAL, RESIDENTIAL, CITY)
 - max_weight_except: (NONE, DELIVERY, DESTINATION, FORESTRY)
@@ -113,7 +114,10 @@ There are also some that take on a numeric value, like:
 - horse_rating: a number from 0 to 6 for the `horse_scale` in OSM, e.g. 0 means "missing", 1 means "common", 2 means "demanding", 3 means difficult, 4 means critical, 5 means dangerous, and 6 means impossible
 - lanes: number of lanes
 - max_slope: a signed decimal for the maximum slope (100 * "elevation change / distance_i") of an edge with `sum(distance_i)=edge_distance`. Important for longer road segments where ups (or downs) can be much bigger than the average_slope. It changes the sign in reverse direction.
-- max_speed: the speed limit from a sign or from local default speed limits (km/h)
+- max_speed: the speed limit from a sign or from local default speed limits (km/h). Without both it is Infinity.
+- max_speed_estimated: true if max_speed comes from local default speed limits (direction dependent, e.g. if only
+  `maxspeed:forward` is tagged). E.g. to exclude only roads with a signed limit above 70km/h use
+  `max_speed > 70 && max_speed < 10000 && !max_speed_estimated`
 - max_height (meter), max_width (meter), max_length (meter)
 - max_weight (tonne), max_axle_load (tonne)
 - with postfix `_average_speed` contains the average speed (km/h) for a specific vehicle
@@ -130,11 +134,6 @@ Special expressions:
 In the next section will see how we can use these encoded values to customize GraphHopper's route calculations.
 
 ## How you can customize GraphHopper's route calculations: Custom Models
-
-*Disclaimer*: Custom models should still be considered a beta feature. They work, but details about the weighting
-formula and the meaning of the different parameters is still subject to change. Also this feature will strongly benefit
-from community feedback, so do not hesitate to share your experience, your favorite custom model or some of the problems
-you ran into when you tried building your own with custom model.
 
 As described in the previous sections, GraphHopper's route calculations are controlled by the weighting of the different
 road segments. GraphHopper offers a simple way to modify this weighting based on the edges' encoded values. To make use
@@ -226,6 +225,10 @@ familiar with programming note that the condition (the value of the `if` key) is
 language (other programming languages like C or JavaScript are very similar in this regard). A more complex condition
 could look like this: `road_class == PRIMARY || road_class == TERTIARY` which uses the **or**
 (`||`) operator and literally means "road_class equals PRIMARY or road_class equals TERTIARY".
+
+Only a subset of Java is allowed in a condition: the operators `==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`, `+`, `-`,
+`*`, `/` and `%`, the negations `!` and `-`, parentheses and a few methods like `Math.sqrt`. Everything else, e.g. the
+bitwise operators `&` and `|`, is rejected.
 
 There can be multiple such 'if statements' in the speed section, and they are evaluated from top to bottom:
 
@@ -482,19 +485,15 @@ You can not only modify the speed of road segments based on properties, like we 
 can also modify the speed of road segments based on their location. To do this you need to first add an area to the
 `areas` section of the custom model. You can then use the "id" in the conditions of your `if/else/else_if` statements.
 
-In the following example we multiply the speed of all edges in an area called `custom1` with `0.7` and also limit it
-to `50km/h`. Note that each area's id needs to be prefixed with `in_`:
+In the following example we limit the speed of all edges in an area called `custom1` to `20km/h`. 
+Note that each area's id needs to be prefixed with `in_`:
 
 ```json
 {
   "speed": [
     {
       "if": "in_custom1",
-      "multiply_by": "0.7"
-    },
-    {
-      "if": "in_custom1",
-      "limit_to": "50"
+      "limit_to": "20"
     }
   ],
   "areas": {
@@ -519,6 +518,8 @@ to `50km/h`. Note that each area's id needs to be prefixed with `in_`:
   }
 }
 ```
+
+Of course the custom model will only have an effect if the route goes through the defined area.
 
 Areas are given in GeoJson format (FeatureCollection). Currently a member of this collection must be a `Feature` with a
 geometry type `Polygon`. Note that the coordinates array of `Polygon` is an array of arrays that
@@ -687,7 +688,7 @@ Similarly, you can discourage border crossings by penalizing transitions between
 
 The value of `limit_to` or `multiply_by` is usually only a number but can be more complex expression like `max_speed`
 or even something like `max_speed + 0.5`. In general one encoded value is accepted in combination with one or more 
-operations with a number and the operator `+`, `*` and `-`.
+operations with a number and the operator `+`, `*` and `-`, and the methods `Math.sqrt`, `Math.min` and `Math.max`.
 
 This can be useful to reduce the speed of the base profile to a dynamic value. See e.g. the following example:
 
@@ -729,6 +730,49 @@ You can use a value expression also for `priority`, e.g. to pre-populated it bas
 Note that when using a dynamic value like `my_precalculated_value` the maximum value correlates strongly with 
 the response time of A-star routing requests (i.e. when CH and LM are disabled). This means that if you pick a
 smaller or more narrow range, or if you can avoid them entirely, then these requests might get faster.
+
+### `parameters`
+
+The `parameters` section defines named numbers and booleans that can be used in conditions and value
+expressions. Similar to `areas` referenced via `in_<area_id>`, a parameter `xy` is referenced with the
+prefix `p_` as `p_xy` - this makes the origin visible in the expression and avoids collisions with
+encoded values:
+
+```json
+{
+  "parameters": { "speed_threshold": 50, "slow_factor": { "value": 0.8, "max": 1 }, "avoid_hills": true },
+  "speed": [
+    { "if": "car_average_speed < p_speed_threshold", "multiply_by": "p_slow_factor" }
+  ],
+  "priority": [
+    { "if": "p_avoid_hills && average_slope > 4", "multiply_by": "0.5" }
+  ]
+}
+```
+
+Parameters can only be defined in the server-side custom model. A request can then override the
+values, but not introduce new parameters and not change the type. Unlike statements, which are
+appended when a request custom model is merged with the profile's custom model, parameters are
+overridden per name. So a request can tweak the values that the server-side profile uses without
+repeating (and accidentally double-applying) its statements e.g. with
+`{"parameters": {"slow_factor": 0.6}}`.
+
+For number parameters the server-side definition can restrict the allowed values with the object
+form `{"value": 0.8, "min": 0.5, "max": 1}` - requests must stay within `[min, max]` and cannot
+specify a range themselves. Without an explicit range `[0, Infinity)` is used. On startup the custom
+model is validated at both ends of every range, so e.g. a parameter used to increase the speed
+requires a finite `max`. A value expression can use at most one parameter and only once, so that
+checking the range endpoints is sufficient. Conditions can combine multiple parameters.
+
+Note that for a profile prepared with landmarks (hybrid mode) a request can change a parameter value
+only if this cannot decrease any edge weight, as the landmark preparation is based on the server-side
+values: the value of a statement must not increase (e.g. a decreased `p_vehicle_max_speed`) and a parameter
+in a condition is only supported for blocking statements, where the condition must apply to more
+edges (e.g. a decreased `p_max_mtb_rating` of the bike custom model excludes more roads). Booleans
+and parameters used in `turn_penalty` or with an encoded value can never change. Everything else is
+rejected and to avoid this use `lm.disable=true`. So pick the server-side value at the permissive end of the range
+(e.g. the smallest truck weight), as requests can only restrict further. Changing parameter values
+does not trigger a recompilation of the custom model, so it is cheaper than changing statements.
 
 ### Customizing `distance_influence`
 

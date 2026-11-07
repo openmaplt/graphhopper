@@ -21,6 +21,7 @@ import com.graphhopper.ResponsePath;
 import com.graphhopper.routing.InstructionsFromEdges;
 import com.graphhopper.routing.Path;
 import com.graphhopper.routing.ev.EncodedValueLookup;
+import com.graphhopper.routing.util.TransportationMode;
 import com.graphhopper.routing.weighting.Weighting;
 import com.graphhopper.storage.Graph;
 import com.graphhopper.util.details.PathDetailsBuilderFactory;
@@ -37,7 +38,7 @@ import java.util.List;
  * So for two waypoints there will be only one Path object. For three waypoints there will be
  * two Path objects.
  * <p>
- * The instructions are generated per Path object and are merged into one continuous InstructionList.
+ * The instructions are generated per leg and are merged into one continuous InstructionList.
  * The PointList per Path object are merged and optionally simplified.
  *
  * @author Peter Karich
@@ -50,10 +51,12 @@ public class PathMerger {
     private final Weighting weighting;
 
     private boolean enableInstructions = true;
-    private boolean enableViaPointInstructions = true;
+    private boolean includeRoundaboutExitInstruction = false;
+    private List<Integer> announcedViaPoints;
     private boolean simplifyResponse = true;
     private RamerDouglasPeucker ramerDouglasPeucker = RDP;
     private boolean calcPoints = true;
+    private TransportationMode instructionsBaseMode = TransportationMode.CAR;
     private PathDetailsBuilderFactory pathBuilderFactory;
     private List<String> requestedPathDetails = Collections.emptyList();
     private double favoredHeading = Double.NaN;
@@ -61,6 +64,11 @@ public class PathMerger {
     public PathMerger(Graph graph, Weighting weighting) {
         this.graph = graph;
         this.weighting = graph.wrapWeighting(weighting);
+    }
+
+    public PathMerger setInstructionsBaseMode(TransportationMode instructionsBaseMode) {
+        this.instructionsBaseMode = instructionsBaseMode;
+        return this;
     }
 
     public PathMerger setCalcPoints(boolean calcPoints) {
@@ -89,8 +97,16 @@ public class PathMerger {
         return this;
     }
 
-    public PathMerger setEnableViaPointInstructions(boolean enableViaPointInstructions) {
-        this.enableViaPointInstructions = enableViaPointInstructions;
+    public PathMerger setIncludeRoundaboutExitInstruction(boolean includeRoundaboutExitInstruction) {
+        this.includeRoundaboutExitInstruction = includeRoundaboutExitInstruction;
+        return this;
+    }
+
+    /**
+     * The indices of the via points that get instructions. Null means all, empty none.
+     */
+    public PathMerger setAnnouncedViaPoints(List<Integer> announcedViaPoints) {
+        this.announcedViaPoints = announcedViaPoints;
         return this;
     }
 
@@ -116,21 +132,6 @@ public class PathMerger {
             fullTimeInMillis += path.getTime();
             fullDistance_mm += path.getDistance_mm();
             fullWeight += path.getWeight();
-            if (enableInstructions) {
-                InstructionList il = InstructionsFromEdges.calcInstructions(path, graph, weighting, evLookup, tr);
-
-                if (!il.isEmpty()) {
-                    fullInstructions.addAll(il);
-
-                    // for all paths except the last replace the FinishInstruction with a ViaInstruction
-                    if (pathIndex + 1 < paths.size()) {
-                        ViaInstruction newInstr = new ViaInstruction(fullInstructions.get(fullInstructions.size() - 1));
-                        newInstr.setViaCount(pathIndex + 1);
-                        fullInstructions.set(fullInstructions.size() - 1, newInstr);
-                    }
-                }
-
-            }
             if (calcPoints || enableInstructions) {
                 PointList tmpPoints = path.calcPoints();
                 if (fullPoints.isEmpty())
@@ -150,6 +151,29 @@ public class PathMerger {
             }
 
             allFound = allFound && path.isFound();
+        }
+
+        if (enableInstructions) {
+            int legStart = 0, viaCount = 0;
+            for (int pathIndex = 0; pathIndex < paths.size(); pathIndex++) {
+                boolean lastPath = pathIndex + 1 == paths.size();
+                if (!lastPath && announcedViaPoints != null && !announcedViaPoints.contains(pathIndex + 1))
+                    continue;
+                InstructionList il = InstructionsFromEdges.calcInstructions(paths.subList(legStart, pathIndex + 1), graph, weighting,
+                        instructionsBaseMode, evLookup, tr, includeRoundaboutExitInstruction);
+                legStart = pathIndex + 1;
+                if (!lastPath) viaCount++;
+                if (!il.isEmpty()) {
+                    fullInstructions.addAll(il);
+
+                    // for all legs except the last replace the FinishInstruction with a ViaInstruction
+                    if (!lastPath) {
+                        ViaInstruction newInstr = new ViaInstruction(fullInstructions.get(fullInstructions.size() - 1));
+                        newInstr.setViaCount(viaCount);
+                        fullInstructions.set(fullInstructions.size() - 1, newInstr);
+                    }
+                }
+            }
         }
 
         if (!fullPoints.isEmpty() && fullPoints.is3D)
@@ -211,12 +235,6 @@ public class PathMerger {
             }
 
             if (instruction.getSign() == Instruction.REACHED_VIA) {
-                // Remove the Via Point Instruction
-                if (!enableViaPointInstructions) {
-                    instructions.remove(i--);
-                    continue;
-                }
-
                 nextInstruction = instructions.get(i + 1);
                 if (nextInstruction.getSign() != Instruction.CONTINUE_ON_STREET
                         || !instruction.extraInfo.containsKey("last_heading")

@@ -8,8 +8,6 @@ import com.graphhopper.routing.util.WayAccess;
 
 import java.util.*;
 
-import static com.graphhopper.routing.util.parsers.OSMTemporalAccessParser.hasPermissiveTemporalRestriction;
-
 public abstract class BikeCommonAccessParser extends AbstractAccessParser implements TagParser {
 
     private static final Set<String> OPP_LANES = new HashSet<>(Arrays.asList("opposite", "opposite_lane", "opposite_track"));
@@ -74,20 +72,9 @@ public abstract class BikeCommonAccessParser extends AbstractAccessParser implem
                 || "cycleway".equals(highwayValue) && !way.hasTag("bicycle", "no")) // cycleway gets bicycle=yes by default
             return WayAccess.WAY;
 
-        int firstIndex = way.getFirstIndex(restrictionKeys);
-        if (firstIndex >= 0) {
-            String firstValue = way.getTag(restrictionKeys.get(firstIndex), "");
-            String[] restrict = firstValue.split(";");
-            // if any of the values allows access then return early (regardless of the order)
-            for (String value : restrict) {
-                if (allowedValues.contains(value))
-                    return WayAccess.WAY;
-            }
-            for (String value : restrict) {
-                if (restrictedValues.contains(value) && !hasPermissiveTemporalRestriction(way, firstIndex, restrictionKeys, allowedValues))
-                    return WayAccess.CAN_SKIP;
-            }
-        }
+        WayAccess access = getAccessFromRestrictions(way);
+        if (access != null)
+            return access;
 
         // accept only if explicitly tagged for bike usage
         if ("motorway".equals(highwayValue) || "motorway_link".equals(highwayValue))
@@ -107,8 +94,8 @@ public abstract class BikeCommonAccessParser extends AbstractAccessParser implem
 
         // handle oneways. The value -1 means it is a oneway but for reverse direction of stored geometry.
         // The tagging oneway:bicycle=no or cycleway:right:oneway=no or cycleway:left:oneway=no lifts the generic oneway restriction of the way for bike.
-        // cycleway:*:oneway describes the cycle facility, not the carriageway, so it does not by itself
-        // make the road oneway for bikes — it only modifies the bike direction when the carriageway is oneway (handled below).
+        // cycleway:*:oneway describes the cycle facility, not the carriageway, so it does not by itself make the road oneway for bikes.
+        // cycleway:*:oneway=-1 on a oneway road is a contraflow cycleway and lifts the restriction too (carriageway forward, cycleway backward).
         boolean isOneway = way.hasTag("oneway", ONEWAYS) && !way.hasTag("oneway", "-1") && !way.hasTag("bicycle:backward", allowedValues)
                 || way.hasTag("oneway", "-1") && !way.hasTag("bicycle:forward", allowedValues)
                 || way.hasTag("oneway:bicycle", ONEWAYS)
@@ -119,16 +106,13 @@ public abstract class BikeCommonAccessParser extends AbstractAccessParser implem
 
         if ((isOneway || roundaboutEnc.getBool(false, edgeId, edgeIntAccess))
                 && !way.hasTag("oneway:bicycle", "no")
-                && !(way.hasTag("cycleway:both") && !way.hasTag("cycleway:both", "no"))
                 && !way.hasTag("cycleway", OPP_LANES)
                 && !way.hasTag("cycleway:left", OPP_LANES)
                 && !way.hasTag("cycleway:right", OPP_LANES)
-                && !way.hasTag("cycleway:left:oneway", "no")
-                && !way.hasTag("cycleway:right:oneway", "no")) {
+                && !way.hasTag("cycleway:left:oneway", "no", "-1")
+                && !way.hasTag("cycleway:right:oneway", "no", "-1")) {
             boolean isBackward = way.hasTag("oneway", "-1")
                     || way.hasTag("oneway:bicycle", "-1")
-                    || way.hasTag("cycleway:left:oneway", "-1")
-                    || way.hasTag("cycleway:right:oneway", "-1")
                     || way.hasTag("vehicle:forward", restrictedValues)
                     || way.hasTag("bicycle:forward", restrictedValues);
             accessEnc.setBool(isBackward, edgeId, edgeIntAccess, true);

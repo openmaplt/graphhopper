@@ -94,6 +94,7 @@ public class Router {
             checkHeadings(request);
             checkPointHints(request);
             checkCurbsides(request);
+            checkAnnouncedViaPoints(request);
             checkNoBlockArea(request);
             checkCustomModel(request);
 
@@ -169,6 +170,19 @@ public class Router {
             throw new IllegalArgumentException("If you pass " + CURBSIDE + ", you need to pass exactly one curbside for every point, empty curbsides will be ignored");
     }
 
+    private void checkAnnouncedViaPoints(GHRequest request) {
+        List<Integer> viaPoints = request.getAnnouncedViaPoints();
+        if (viaPoints == null)
+            return;
+        int maxIndex = request.getPoints().size() - 1;
+        for (int i = 0; i < viaPoints.size(); i++) {
+            if (viaPoints.get(i) < 0 || viaPoints.get(i) > maxIndex)
+                throw new IllegalArgumentException(ANNOUNCED_VIA_POINTS + " must contain point indices from 0 to " + maxIndex + ", but was: " + viaPoints);
+            if (i > 0 && viaPoints.get(i) <= viaPoints.get(i - 1))
+                throw new IllegalArgumentException(ANNOUNCED_VIA_POINTS + " must be strictly increasing, but was: " + viaPoints);
+        }
+    }
+
     private void checkNoBlockArea(GHRequest request) {
         if (request.getHints().has("block_area"))
             throw new IllegalArgumentException("The `block_area` parameter is no longer supported. Use a custom model with `areas` instead.");
@@ -221,7 +235,7 @@ public class Router {
         // we merge the different legs of the roundtrip into one response path
         // note that the waypoints are not just the snapped points of the snaps, as usual, because we do some kind of tweak
         // to avoid 'unnecessary tails' in the roundtrip algo
-        ResponsePath responsePath = concatenatePaths(request, solver.weighting, queryGraph, result.paths, result.wayPoints);
+        ResponsePath responsePath = concatenatePaths(request, solver, queryGraph, result.paths, result.wayPoints);
         ghRsp.add(responsePath);
         ghRsp.getHints().putObject("visited_nodes.sum", result.visitedNodes);
         ghRsp.getHints().putObject("visited_nodes.average", (float) result.visitedNodes / (snaps.size() - 1));
@@ -252,7 +266,7 @@ public class Router {
             throw new RuntimeException("Empty paths for alternative route calculation not expected");
 
         // each path represents a different alternative and we do the path merging for each of them
-        PathMerger pathMerger = createPathMerger(request, solver.weighting, queryGraph);
+        PathMerger pathMerger = createPathMerger(request, solver, queryGraph);
         for (Path path : result.paths) {
             PointList waypoints = getWaypoints(snaps);
             ResponsePath responsePath = pathMerger.doWork(waypoints, Collections.singletonList(path), encodingManager, translationMap.getWithFallBack(request.getLocale()));
@@ -283,7 +297,7 @@ public class Router {
             throw new RuntimeException("There should be exactly one more point than paths. points:" + request.getPoints().size() + ", paths:" + result.paths.size());
 
         // here each path represents one leg of the via-route and we merge them all together into one response path
-        ResponsePath responsePath = concatenatePaths(request, solver.weighting, queryGraph, result.paths, getWaypoints(snaps));
+        ResponsePath responsePath = concatenatePaths(request, solver, queryGraph, result.paths, getWaypoints(snaps));
         responsePath.addDebugInfo(result.debug);
         ghRsp.add(responsePath);
         ghRsp.getHints().putObject("visited_nodes.sum", result.visitedNodes);
@@ -291,9 +305,9 @@ public class Router {
         return ghRsp;
     }
 
-    private PathMerger createPathMerger(GHRequest request, Weighting weighting, Graph graph) {
+    private PathMerger createPathMerger(GHRequest request, Solver solver, Graph graph) {
         boolean enableInstructions = request.getHints().getBool(Parameters.Routing.INSTRUCTIONS, routerConfig.isInstructionsEnabled());
-        boolean enableViaPointInstructions = request.getHints().getBool(Parameters.Routing.VIA_POINT_INSTRUCTIONS, routerConfig.isViaPointInstructionsEnabled());
+        boolean includeRoundaboutExitInstruction = request.getHints().getBool(Parameters.Routing.ROUNDABOUT_EXITS, false);
         boolean calcPoints = request.getHints().getBool(Parameters.Routing.CALC_POINTS, routerConfig.isCalcPoints());
         double wayPointMaxDistance = request.getHints().getDouble(Parameters.Routing.WAY_POINT_MAX_DISTANCE, 0.5);
         double elevationWayPointMaxDistance = request.getHints().getDouble(ELEVATION_WAY_POINT_MAX_DISTANCE, routerConfig.getElevationWayPointMaxDistance());
@@ -301,11 +315,13 @@ public class Router {
         RamerDouglasPeucker peucker = new RamerDouglasPeucker().
                 setMaxDistance(wayPointMaxDistance).
                 setElevationMaxDistance(elevationWayPointMaxDistance);
-        PathMerger pathMerger = new PathMerger(graph, weighting).
+        PathMerger pathMerger = new PathMerger(graph, solver.weighting).
+                setInstructionsBaseMode(solver.profile.getInstructionsBaseMode()).
                 setCalcPoints(calcPoints).
                 setRamerDouglasPeucker(peucker).
                 setEnableInstructions(enableInstructions).
-                setEnableViaPointInstructions(enableViaPointInstructions).
+                setIncludeRoundaboutExitInstruction(includeRoundaboutExitInstruction).
+                setAnnouncedViaPoints(request.getAnnouncedViaPoints()).
                 setPathDetailsBuilders(pathDetailsBuilderFactory, request.getPathDetails()).
                 setSimplifyResponse(routerConfig.isSimplifyResponse() && wayPointMaxDistance > 0);
 
@@ -314,8 +330,8 @@ public class Router {
         return pathMerger;
     }
 
-    private ResponsePath concatenatePaths(GHRequest request, Weighting weighting, QueryGraph queryGraph, List<Path> paths, PointList waypoints) {
-        PathMerger pathMerger = createPathMerger(request, weighting, queryGraph);
+    private ResponsePath concatenatePaths(GHRequest request, Solver solver, QueryGraph queryGraph, List<Path> paths, PointList waypoints) {
+        PathMerger pathMerger = createPathMerger(request, solver, queryGraph);
         return pathMerger.doWork(waypoints, paths, encodingManager, translationMap.getWithFallBack(request.getLocale()));
     }
 

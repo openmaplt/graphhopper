@@ -103,11 +103,8 @@ public class Parameters {
          * if true the response will contain turn instructions
          */
         public static final String INSTRUCTIONS = "instructions";
+        public static final String ROUNDABOUT_EXITS = "roundabout_exits";
         public static final String INIT_INSTRUCTIONS = ROUTING_INIT_PREFIX + "instructions";
-        /**
-         * if true the response will contain any potential via-point instructions
-         */ 
-        public static final String VIA_POINT_INSTRUCTIONS = "via_point_instructions";
         /**
          * if true the response will contain a point list
          */
@@ -126,6 +123,7 @@ public class Parameters {
         public static final String PASS_THROUGH = "pass_through";
         public static final String POINT_HINT = "point_hint";
         public static final String CURBSIDE = "curbside";
+        public static final String ANNOUNCED_VIA_POINTS = "announced_via_points";
         public static final String CURBSIDE_STRICTNESS = "curbside_strictness";
         public static final String SNAP_PREVENTION = "snap_prevention";
         /**

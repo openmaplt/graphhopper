@@ -112,14 +112,14 @@ public class OSMTollParser implements TagParser {
                 else
                     return Toll.NO;
             }
-            case BEL, BLR, LUX, POL, SWE -> {
+            case BEL, BLR, LUX, NLD, POL, SWE -> {
                 RoadClass roadClass = RoadClass.find(readerWay.getTag("highway", ""));
                 if (roadClass == RoadClass.MOTORWAY)
                     return Toll.HGV;
                 else
                     return Toll.NO;
             }
-            case BGR, CZE, FRA, GRC, HRV, ITA, PRT, SRB, ESP -> {
+            case BGR, CZE, FRA, GRC, HRV, ITA, PRT, SRB -> {
                 RoadClass roadClass = RoadClass.find(readerWay.getTag("highway", ""));
                 if (roadClass == RoadClass.MOTORWAY)
                     return Toll.ALL;

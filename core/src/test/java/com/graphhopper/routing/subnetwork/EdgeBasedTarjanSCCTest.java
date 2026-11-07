@@ -18,13 +18,14 @@
 
 package com.graphhopper.routing.subnetwork;
 
+import com.carrotsearch.hppc.BitSet;
 import com.carrotsearch.hppc.IntArrayList;
 import com.carrotsearch.hppc.cursors.IntCursor;
 import com.graphhopper.routing.ev.DecimalEncodedValue;
 import com.graphhopper.routing.ev.DecimalEncodedValueImpl;
 import com.graphhopper.routing.ev.EncodedValue;
 import com.graphhopper.routing.subnetwork.EdgeBasedTarjanSCC.ConnectedComponents;
-import com.graphhopper.routing.subnetwork.TarjanSCCTest.IntWithArray;
+import com.graphhopper.routing.subnetwork.NodeBasedTarjanSCCTest.IntWithArray;
 import com.graphhopper.routing.util.AllEdgesIterator;
 import com.graphhopper.storage.BaseGraph;
 import com.graphhopper.util.GHUtility;
@@ -32,10 +33,16 @@ import com.graphhopper.util.RandomGraph;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Random;
+
 import java.util.Set;
 
-import static com.graphhopper.routing.subnetwork.TarjanSCCTest.buildComponentSet;
+import static com.graphhopper.routing.subnetwork.NodeBasedTarjanSCCTest.buildComponentSet;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class EdgeBasedTarjanSCCTest {
@@ -238,6 +245,36 @@ class EdgeBasedTarjanSCCTest {
         }
     }
 
+    @Test
+    public void reverseEdgeKeyStartsAtBaseNode() {
+        // 0 --> 1   3 --> 4
+        // |     |   |     |
+        // -< 2 <-   -< 5 <-
+        g.edge(0, 1).setDistance(1).set(speedEnc, 10, 0); // edge-keys 0 (0->1), 1 (1->0)
+        g.edge(1, 2).setDistance(1).set(speedEnc, 10, 0); // edge-keys 2 (1->2), 3 (2->1)
+        g.edge(2, 0).setDistance(1).set(speedEnc, 10, 0); // edge-keys 4 (2->0), 5 (0->2)
+        // the same circle, but in reverse storage order
+        g.edge(4, 3).setDistance(1).set(speedEnc, 0, 10); // edge-keys 6 (4->3), 7 (3->4)
+        g.edge(5, 4).setDistance(1).set(speedEnc, 0, 10); // edge-keys 8 (5->4), 9 (4->5)
+        g.edge(3, 5).setDistance(1).set(speedEnc, 0, 10); // edge-keys 10 (3->5), 11 (5->3)
+        // we deny u-turns so it's crucial to start the search correctly in both directions
+        EdgeBasedTarjanSCC.EdgeTransitionFilter noUTurnFilter = (prev, edge) -> fwdAccessFilter.accept(prev, edge) && prev != edge.getEdge();
+        for (ConnectedComponents result : Arrays.asList(
+                EdgeBasedTarjanSCC.findComponentsRecursive(g, noUTurnFilter, false),
+                EdgeBasedTarjanSCC.findComponents(g, noUTurnFilter, false),
+                EdgeBasedTarjanSCC.findComponentsForStartEdges(g, noUTurnFilter, IntArrayList.from(0, 1, 2, 3, 4, 5)))) {
+            assertEquals(2, result.getComponents().size());
+
+            IntArrayList fwdCircle = result.getComponents().get(0);
+            Arrays.sort(fwdCircle.buffer, 0, fwdCircle.size());
+            assertEquals(IntArrayList.from(0, 2, 4), fwdCircle);
+
+            IntArrayList bwdCircle = result.getComponents().get(1);
+            Arrays.sort(bwdCircle.buffer, 0, bwdCircle.size());
+            assertEquals(IntArrayList.from(7, 9, 11), bwdCircle);
+        }
+    }
+
     @RepeatedTest(10)
     public void implicitVsExplicitRecursionExcludeSingle() {
         doImplicitVsExplicit(true);
@@ -296,6 +333,70 @@ class EdgeBasedTarjanSCCTest {
             edges.add(iter.getEdge());
         ConnectedComponents componentsForStartEdges = EdgeBasedTarjanSCC.findComponentsForStartEdges(g, fwdAccessFilter, edges);
         compareResults(g, seed, components, componentsForStartEdges);
+    }
+
+    @RepeatedTest(20)
+    public void withinEdges_sameAsStartEdgesWithFilter() {
+        long seed = System.nanoTime();
+        Random rnd = new Random(seed);
+        RandomGraph.start().seed(seed).nodes(500).speed(10d).speedZero(0.1).fill(g, speedEnc);
+        BitSet edgeBits = new BitSet();
+        IntArrayList edges = new IntArrayList();
+        double fraction = rnd.nextDouble();
+        for (int edge = 0; edge < g.getEdges(); edge++)
+            if (rnd.nextDouble() < fraction) {
+                edgeBits.set(edge);
+                edges.add(edge);
+            }
+        EdgeBasedTarjanSCC.EdgeTransitionFilter withinEdges = (prev, edge) -> edgeBits.get(edge.getEdge()) && fwdAccessFilter.accept(prev, edge);
+        ConnectedComponents expected = EdgeBasedTarjanSCC.findComponentsForStartEdges(g, withinEdges, edges);
+        int firstEdge = edges.isEmpty() ? 0 : rnd.nextInt(edges.get(0) + 1);
+        BitSet shiftedEdgeBits = new BitSet();
+        for (IntCursor edge : edges)
+            shiftedEdgeBits.set(edge.value - firstEdge);
+
+        List<IntArrayList> components = new ArrayList<>();
+        int[] singleEdgeComponents = {0};
+        EdgeBasedTarjanSCC.findComponentsWithinEdges(g, shiftedEdgeBits, firstEdge, fwdAccessFilter, new EdgeBasedTarjanSCC.SCCConsumer() {
+            @Override
+            public void beginComponent() {
+                components.add(new IntArrayList());
+            }
+
+            @Override
+            public void edgeKey(int edgeKey) {
+                components.getLast().add(edgeKey);
+            }
+
+            @Override
+            public void singleEdgeComponent(int edgeKey) {
+                singleEdgeComponents[0]++;
+            }
+        });
+        // both run the same search in the same order, so even the order of the components and their edge keys is the same
+        assertEquals(expected.getComponents(), components, "seed: " + seed);
+        assertEquals(expected.getTotalComponents(), components.size() + singleEdgeComponents[0], "seed: " + seed);
+    }
+
+    @Test
+    public void bitSetIndex() {
+        BitSet bits = new BitSet();
+        int[] setBits = {3, 63, 64, 65, 200, 1000};
+        for (int b : setBits)
+            bits.set(b);
+        EdgeBasedTarjanSCC.BitSetIndex index = new EdgeBasedTarjanSCC.BitSetIndex(bits);
+        assertEquals(setBits.length, index.size());
+        for (int i = 0; i < setBits.length; i++) {
+            assertEquals(i, index.indexOf(setBits[i]));
+            assertTrue(index.contains(setBits[i]));
+        }
+        for (int b : new int[]{-65, -1, 0, 4, 62, 66, 999, 1001, 5000}) {
+            assertEquals(-1, index.indexOf(b));
+            assertFalse(index.contains(b));
+        }
+        IntArrayList iterated = new IntArrayList();
+        index.forEach(iterated::add);
+        assertEquals(IntArrayList.from(setBits), iterated);
     }
 
     private void compareResults(BaseGraph g, long seed, ConnectedComponents expected, ConnectedComponents given) {

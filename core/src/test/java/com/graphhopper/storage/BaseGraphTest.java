@@ -53,7 +53,7 @@ public class BaseGraphTest extends AbstractGraphStorageTester {
 
     @Test
     public void testSave_and_fileFormat() {
-        graph = newGHStorage(new GHDirectory(defaultGraphLoc, DAType.RAM_STORE), true).create(defaultSize);
+        graph = newGHStorage(new GHDirectory(defaultGraphLoc, DAType.RAM), true).create(defaultSize);
         NodeAccess na = graph.getNodeAccess();
         assertTrue(na.is3D());
         na.setNode(0, 10, 10, 0);
@@ -83,7 +83,7 @@ public class BaseGraphTest extends AbstractGraphStorageTester {
         graph.flush();
         graph.close();
 
-        graph = newGHStorage(new GHDirectory(defaultGraphLoc, DAType.MMAP), true);
+        graph = newGHStorage(new GHDirectory(defaultGraphLoc, DAType.FOREIGN_MMAP), true);
         graph.loadExisting();
 
         assertEquals(12, graph.getNodes());
@@ -110,14 +110,14 @@ public class BaseGraphTest extends AbstractGraphStorageTester {
 
     @Test
     public void testSave_and_Freeze() {
-        graph = newGHStorage(new GHDirectory(defaultGraphLoc, DAType.RAM_STORE), true).create(defaultSize);
+        graph = newGHStorage(new GHDirectory(defaultGraphLoc, DAType.RAM), true).create(defaultSize);
         graph.edge(1, 0);
         graph.freeze();
 
         graph.flush();
         graph.close();
 
-        graph = newGHStorage(new GHDirectory(defaultGraphLoc, DAType.MMAP), true);
+        graph = newGHStorage(new GHDirectory(defaultGraphLoc, DAType.FOREIGN_MMAP), true);
         graph.loadExisting();
         assertEquals(2, graph.getNodes());
         assertTrue(graph.isFrozen());
@@ -166,12 +166,12 @@ public class BaseGraphTest extends AbstractGraphStorageTester {
 
     @Test
     public void testDoThrowExceptionIfDimDoesNotMatch() {
-        graph = newGHStorage(new GHDirectory(defaultGraphLoc, DAType.RAM_STORE), false);
+        graph = newGHStorage(new GHDirectory(defaultGraphLoc, DAType.RAM), false);
         graph.create(1000);
         graph.flush();
         graph.close();
 
-        graph = newGHStorage(new GHDirectory(defaultGraphLoc, DAType.RAM_STORE), true);
+        graph = newGHStorage(new GHDirectory(defaultGraphLoc, DAType.RAM), true);
         assertThrows(Exception.class, () -> graph.loadExisting());
     }
 
@@ -310,6 +310,20 @@ public class BaseGraphTest extends AbstractGraphStorageTester {
         assertEquals(RoadClass.LIVING_STREET, edge4.get(rcEnc));
     }
 
+    @Test
+    public void setWayGeometry_copiesKeepSharingTheGeometry() {
+        BaseGraph graph = createGHStorage();
+        EdgeIteratorState edge = graph.edge(3, 5).setWayGeometry(Helper.createPointList(1, 1));
+        EdgeIteratorState copy = graph.copyEdge(edge.getEdge(), true);
+        // a longer geometry needs a new entry: the copy must move too, otherwise it can no longer be found
+        PointList longer = Helper.createPointList(1, 1, 2, 2, 3, 3);
+        edge.setWayGeometry(longer);
+        assertEquals(longer, copy.fetchWayGeometry(PILLAR_ONLY));
+        IntArrayList copies = new IntArrayList();
+        graph.forEdgeAndCopiesOfEdge(graph.createEdgeExplorer(), 3, edge.getEdge(), copies::add);
+        assertEquals(2, copies.size());
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     public void copyEdge_multiple(boolean withGeometries) {
@@ -428,6 +442,23 @@ public class BaseGraphTest extends AbstractGraphStorageTester {
         assertEquals(1.0, fetched.getLat(0), 1e-6);
         assertEquals(1.0 + (maxNodes - 1) * 0.0001, fetched.getLat(maxNodes - 1), 1e-6);
 
+        graph.close();
+    }
+
+    @Test
+    public void testPillarEleRoundedTo5cm() {
+        BaseGraph graph = createGHStorage(defaultGraphLoc, true);
+        NodeAccess na = graph.getNodeAccess();
+        na.setNode(0, 49.0, 9.0, 300);
+        na.setNode(1, 49.001, 9.001, 310);
+        EdgeIteratorState edge = graph.edge(0, 1);
+        // set via the reversed state, i.e. stored in reverse order
+        edge.detach(true).setWayGeometry(Helper.createPointList3D(49.0009, 9.0009, 308.98, 49.0001, 9.0001, 301.07));
+        assertEquals(Helper.createPointList3D(49.0, 9.0, 300, 49.0001, 9.0001, 301.05, 49.0009, 9.0009, 309, 49.001, 9.001, 310),
+                edge.fetchWayGeometry(ALL));
+        PointList pillars = edge.detach(true).fetchWayGeometry(PILLAR_ONLY);
+        assertEquals(309.00, pillars.getEle(0), 1e-4);
+        assertEquals(301.05, pillars.getEle(1), 1e-4);
         graph.close();
     }
 
