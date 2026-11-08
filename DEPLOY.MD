@@ -36,13 +36,20 @@ cd [server-path-to-graphhopper]
 
 ### ⏰ Automation (Cron)
 
-To update map data automatically every night at 04:00, add a cron job on the server:
+The map is refreshed from `[server-path-to-osm-source]/data.pbf` every Friday at 03:00 by a cron job of the **`[server-user]`** user
+(must NOT be root, see below):
 
 ```bash
-crontab -e
-# Add this line (update the path if necessary):
-0 4 * * * [server-path-to-graphhopper]/update-data.sh >> [server-path-to-graphhopper]/update.log 2>&1
+crontab -e -u [server-user]
+0 3 * * 5 [server-path-to-graphhopper]/update-data.sh >> [server-path-to-graphhopper]/update.log 2>&1
 ```
+
+The container runs as that same user (`user: "1000:1000"` in `docker-compose.yml`), so `data/` stays writable for the script.
+If you ever run something in `data/` as root, fix it with `chown -R [server-user]:[server-user] data`.
+`update-data.sh` stops on the first error (`set -e`) – check `update.log` for `ERROR`/`Permission denied`.
+
+**Note:** `local-deploy.sh` does not clear `data/graph-cache`. After a GraphHopper upgrade or a change of
+`graph.encoded_values` run `./update-data.sh` (or delete `data/graph-cache`) so the graph is rebuilt.
 
 ## 🔍 Monitoring
 Check the logs of the running container:

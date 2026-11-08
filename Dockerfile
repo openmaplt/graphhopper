@@ -1,4 +1,4 @@
-FROM eclipse-temurin:21-jre-jammy
+FROM eclipse-temurin:25-jre-jammy
 WORKDIR /graphhopper
 
 # Default JVM options
@@ -8,7 +8,7 @@ ENV JAVA_OPTS="-Xmx4g -Xms4g -server"
 COPY graphhopper.jar .
 
 # The config will be mounted via docker-compose, but we need the data directory
-RUN mkdir -p /graphhopper/data
+RUN mkdir -p /graphhopper/data /graphhopper/logs && chown -R 1000:1000 /graphhopper
 
 EXPOSE 8989 8990
 

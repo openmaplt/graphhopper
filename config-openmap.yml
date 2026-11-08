@@ -28,7 +28,7 @@ graphhopper:
   graph.encoded_values: |
     kayak_access, kayak_average_speed, waterway_obstacle,
     car_access, car_average_speed, country, road_class, roundabout, max_speed, road_class_link, road_environment,
-    foot_access, foot_average_speed, foot_priority, foot_road_access, hike_rating, average_slope,
+    foot_access, foot_average_speed, foot_priority, foot_road_access, sidewalk, hike_rating, average_slope,
     bike_access, bike_average_speed, bike_priority, bike_road_access, bike_network, mtb_rating, ferry_speed
 
   #### Elevation provider ####

@@ -2,10 +2,11 @@ services:
   graphhopper:
     build: .
     container_name: graphhopper-openmap
+    user: "1000:1000"
     ports:
       - "8988:8989"
     environment:
-      - JAVA_OPTS=-Xmx4g -Xms4g -server
+      - JAVA_OPTS=-Xmx4g -Xms4g -server -XX:CompileCommand=quiet -XX:CompileCommand=exclude,com.graphhopper.coll.GHLongLongBTree$$BTreeEntry::putOrCompute
     volumes:
       - ./config-openmap.yml:/graphhopper/config.yml:ro
       - ./data:/graphhopper/data
