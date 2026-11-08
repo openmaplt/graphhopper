@@ -11,6 +11,12 @@ import java.util.Map;
 
 public class OpenmapOSMHelper {
 
+    /** OSM node tag keys needed for waterway obstacles (only read when kayak routing is enabled). */
+    public static final java.util.Set<String> KAYAK_NODE_TAGS = java.util.Set.of(
+            "whitewater", "waterway", "description", "name",
+            "distance", "waterway:milestone", "canoe", "boat", "kayak");
+
+
     /**
      * For waterway barrier edges (dams, hazards, etc.): inject obstacle description
      * from the barrier node's OSM tags into the edge key-values.

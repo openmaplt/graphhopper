@@ -38,6 +38,8 @@ public class OSMParsers {
     private final List<RestrictionTagParser> restrictionTagParsers;
     private final EncodedValue.InitializerConfig relConfig = new EncodedValue.InitializerConfig();
 
+    private Boolean kayakEnabled;
+
     public OSMParsers() {
         this(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
     }
@@ -57,6 +59,7 @@ public class OSMParsers {
 
     public OSMParsers addWayTagParser(TagParser tagParser) {
         wayTagParsers.add(tagParser);
+        kayakEnabled = null;
         return this;
     }
 
@@ -68,6 +71,17 @@ public class OSMParsers {
     public OSMParsers addRestrictionTagParser(RestrictionTagParser restrictionTagParser) {
         restrictionTagParsers.add(restrictionTagParser);
         return this;
+    }
+
+    /**
+     * @return true if the kayak/canoe routing (kayak_access) is part of this import. Waterway specific OSM handling
+     * is only active then, so that the graph for all other profiles stays identical to upstream GraphHopper.
+     */
+    public boolean isKayakEnabled() {
+        Boolean enabled = kayakEnabled;
+        if (enabled == null)
+            kayakEnabled = enabled = wayTagParsers.stream().anyMatch(p -> p instanceof lt.openmap.graphhopper.KayakAccessParser);
+        return enabled;
     }
 
     public boolean acceptWay(ReaderWay way) {
@@ -83,7 +97,7 @@ public class OSMParsers {
             return true;
         else if ("platform".equals(way.getTag("railway")))
             return true;
-        else if (way.getTag("waterway") != null)
+        else if (isKayakEnabled() && way.getTag("waterway") != null)
             // accept waterway=river|stream|canal|drain|... for kayak/canoe routing
             return true;
         else

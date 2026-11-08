@@ -254,6 +254,24 @@ public class BaseGraphTest extends AbstractGraphStorageTester {
         assertEdge(g.getEdgeIteratorStateForKey(1), 1, 0, true, 0, 1);
     }
 
+    @Test
+    public void testSortEdgesWithNodeWithoutEdges() {
+        BaseGraph g = new BaseGraph.Builder(encodingManager).create();
+        g.getNodeAccess().setNode(0, 10, 10);
+        g.getNodeAccess().setNode(1, 10, 11);
+        g.getNodeAccess().setNode(2, 10, 12);
+        g.getNodeAccess().setNode(3, 11, 12); // no edges at all
+        GHUtility.setSpeed(60, true, true, carAccessEnc, carSpeedEnc, g.edge(0, 1).setDistance(10));
+        GHUtility.setSpeed(60, true, true, carAccessEnc, carSpeedEnc, g.edge(1, 2).setDistance(20));
+        // reverse the edge order
+        g.sortEdges(e -> 1 - e);
+        assertEquals(20, g.getEdgeIteratorState(0, Integer.MIN_VALUE).getDistance(), 1e-3);
+        assertEquals(10, g.getEdgeIteratorState(1, Integer.MIN_VALUE).getDistance(), 1e-3);
+        assertEquals(0, GHUtility.count(g.createEdgeExplorer().setBaseNode(3)));
+        assertEquals(1, GHUtility.count(g.createEdgeExplorer().setBaseNode(0)));
+        assertEquals(2, GHUtility.count(g.createEdgeExplorer().setBaseNode(1)));
+    }
+
     private void assertEdge(EdgeIteratorState edge, int base, int adj, boolean reverse, int edgeId, int key) {
         assertEquals(base, edge.getBaseNode());
         assertEquals(adj, edge.getAdjNode());

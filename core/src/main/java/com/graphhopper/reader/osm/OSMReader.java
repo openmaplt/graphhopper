@@ -162,6 +162,7 @@ public class OSMReader {
                 .setRelationProcessor(this::processRelation)
                 .setEdgeHandler(this::addEdge)
                 .setWorkerThreads(config.getWorkerThreads())
+                .setIncludeNodeTags(osmParsers.isKayakEnabled() ? lt.openmap.graphhopper.OpenmapOSMHelper.KAYAK_NODE_TAGS : java.util.Collections.emptySet())
                 .build();
         waySegmentParser.readOSM(osmFile);
         osmDataDate = waySegmentParser.getTimestamp();
@@ -207,9 +208,10 @@ public class OSMReader {
      * junction between different ways this will be ignored and no artificial edge will be created.
      */
     protected boolean isBarrierNode(ReaderNode node) {
-        return node.hasTag("barrier") || node.hasTag("ford")
-                || node.hasTag("whitewater")                  // dams, hazards, put-in/egress for kayak routing
-                || node.hasTag("waterway", "milestone");      // distance markers along waterways
+        if (node.hasTag("barrier") || node.hasTag("ford"))
+            return true;
+        // kayak routing only: dams, hazards, put-in/egress and distance markers along waterways
+        return osmParsers.isKayakEnabled() && (node.hasTag("whitewater") || node.hasTag("waterway", "milestone"));
     }
 
     /**

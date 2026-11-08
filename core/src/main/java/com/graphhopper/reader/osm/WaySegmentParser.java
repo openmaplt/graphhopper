@@ -60,11 +60,8 @@ import static com.graphhopper.util.Helper.nf;
  */
 public class WaySegmentParser {
     private static final Logger LOGGER = LoggerFactory.getLogger(WaySegmentParser.class);
-    private static final Set<String> INCLUDE_IF_NODE_TAGS = new HashSet<>(Arrays.asList(
-            "barrier", "highway", "railway", "crossing", "ford",
-            // Waterway obstacle tags for kayak/canoe routing
-            "whitewater", "waterway", "description", "name",
-            "distance", "waterway:milestone", "canoe", "boat", "kayak"));
+    private static final Set<String> DEFAULT_INCLUDE_IF_NODE_TAGS = Set.of("barrier", "highway", "railway", "crossing", "ford");
+    private Set<String> includeIfNodeTags = DEFAULT_INCLUDE_IF_NODE_TAGS;
 
     private Predicate<ReaderWay> wayFilter = way -> true;
     private Predicate<ReaderNode> splitNodeFilter = node -> false;
@@ -225,7 +222,7 @@ public class WaySegmentParser {
 
             // store node tags if at least one important tag is included and make this available for the edge handler
             for (Map.Entry<String, Object> e : node.getTags().entrySet()) {
-                if (INCLUDE_IF_NODE_TAGS.contains(e.getKey())) {
+                if (includeIfNodeTags.contains(e.getKey())) {
                     node.removeTag("created_by");
                     node.removeTag("source");
                     node.removeTag("note");
@@ -482,6 +479,21 @@ public class WaySegmentParser {
          * @param workerThreads the number of threads used for the low level reading (PBF decoding) of the OSM file,
          *                      see {@link OSMInput#defaultWorkerThreads()}
          */
+        /**
+         * @param extraTags additional OSM node tag keys (besides the default ones) that make the node tags available
+         *                  to the edge handler
+         */
+        public Builder setIncludeNodeTags(Set<String> extraTags) {
+            if (extraTags.isEmpty()) {
+                waySegmentParser.includeIfNodeTags = DEFAULT_INCLUDE_IF_NODE_TAGS;
+            } else {
+                Set<String> all = new HashSet<>(DEFAULT_INCLUDE_IF_NODE_TAGS);
+                all.addAll(extraTags);
+                waySegmentParser.includeIfNodeTags = all;
+            }
+            return this;
+        }
+
         public Builder setWorkerThreads(int workerThreads) {
             waySegmentParser.workerThreads = workerThreads;
             return this;
